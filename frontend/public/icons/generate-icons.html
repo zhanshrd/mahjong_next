@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>Generate PWA Icons</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; background: #f0f0f0; }
+    .icon-row { display: flex; align-items: center; gap: 20px; margin: 20px 0; }
+    canvas { border: 1px solid #ccc; background: white; }
+    a { color: #2E7D32; font-weight: bold; }
+    h1 { color: #1a472a; }
+  </style>
+</head>
+<body>
+  <h1>PWA Icon Generator</h1>
+  <p>Click links below to download PNG icons.</p>
+
+  <div class="icon-row">
+    <canvas id="c192" width="192" height="192"></canvas>
+    <div>
+      <strong>192x192</strong> (icon-192.png)<br>
+      <a id="dl192" href="#" download="icon-192.png">Download 192x192</a>
+    </div>
+  </div>
+
+  <div class="icon-row">
+    <canvas id="c512" width="512" height="512"></canvas>
+    <div>
+      <strong>512x512</strong> (icon-512.png)<br>
+      <a id="dl512" href="#" download="icon-512.png">Download 512x512</a>
+    </div>
+  </div>
+
+  <script>
+    const svgContent = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#2d5a3d"/>
+      <stop offset="100%" style="stop-color:#1a472a"/>
+    </linearGradient>
+    <linearGradient id="tile" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#fffff5"/>
+      <stop offset="100%" style="stop-color:#f5f0e0"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+  <rect x="136" y="96" width="240" height="320" rx="24" fill="url(#tile)"/>
+  <text x="256" y="260" text-anchor="middle" font-size="140" font-family="serif" font-weight="bold" fill="#c0392b">&#x4E07;</text>
+  <text x="256" y="380" text-anchor="middle" font-size="36" font-family="serif" fill="#7f8c8d" letter-spacing="16">&#x4E1C;&#x5357;&#x897F;&#x5317;</text>
+</svg>`;
+
+    const blob = new Blob([svgContent], { type: 'image/svg+xml' });
+    const url = URL.createObjectURL(blob);
+
+    function renderIcon(canvasId, size) {
+      const canvas = document.getElementById(canvasId);
+      const ctx = canvas.getContext('2d');
+      const img = new Image();
+      img.onload = () => {
+        ctx.drawImage(img, 0, 0, size, size);
+        const dlLink = document.getElementById('dl' + size);
+        dlLink.href = canvas.toDataURL('image/png');
+      };
+      img.src = url;
+    }
+
+    renderIcon('c192', 192);
+    renderIcon('c512', 512);
+  </script>
+</body>
+</html>
