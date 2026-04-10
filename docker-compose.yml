@@ -1,0 +1,12 @@
+services:
+  app:
+    build:
+      context: .
+      args:
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+    ports:
+      - "${APP_PORT:-3001}:3001"
+    restart: unless-stopped
