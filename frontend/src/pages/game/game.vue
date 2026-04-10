@@ -362,6 +362,23 @@ const gameOverPatterns = ref([])
 const isLandscape = ref(window.innerWidth > window.innerHeight)
 const selfKongTiles = ref([]) // tiles that can be used for concealed kong
 
+function resetForNewRound() {
+  playerDiscards.value = [[], [], [], []]
+  myMelds.value = []
+  otherMelds.value = [[], [], [], []]
+  chatBubbles.value = []
+  tingpaiDetails.value = []
+  selfKongTiles.value = []
+  clearClaimState()
+  lastDiscard.value = null
+  lastDiscardPlayer.value = -1
+  selectedTile.value = null
+  selectedIndex.value = -1
+  currentDrawnTile.value = null
+  hasDrawn.value = false
+  showTingpai.value = false
+}
+
 // Sorted hand (excluding the just-drawn tile, shown separately)
 const drawnTile = computed(() => {
   if (currentDrawnTile.value && hasDrawn.value) return currentDrawnTile.value
@@ -451,6 +468,7 @@ onMounted(() => {
   isCreator.value = store.isCreator
 
   socket.on('game_started', (data) => {
+    resetForNewRound()
     myIndex.value = data.playerIndex
     if (data.roundNumber) roundNumber.value = data.roundNumber
     if (data.totalRounds) totalRounds.value = data.totalRounds
@@ -508,7 +526,10 @@ onMounted(() => {
     selectedIndex.value = -1
     currentDrawnTile.value = null
     clearClaimState()
-    if (data.playerIndex !== undefined && data.playerIndex !== myIndex.value) {
+    if (data.playerIndex === myIndex.value) {
+      const idx = myHand.value.indexOf(data.tile)
+      if (idx !== -1) myHand.value.splice(idx, 1)
+    } else if (data.playerIndex !== undefined) {
       if (typeof otherHands.value[data.playerIndex] === 'number') {
         otherHands.value[data.playerIndex] -= 1
       }
@@ -516,26 +537,6 @@ onMounted(() => {
   })
 
   // === New claim system ===
-
-  // Broadcast: claim window opened after a discard
-  socket.on('claim_window_opened', (data) => {
-    // data: { discardTile, fromPlayer, eligiblePlayers: [{playerIndex, canWin, canPong, canChow, canKong}] }
-    const me = data.eligiblePlayers?.find(p => p.playerIndex === myIndex.value)
-
-    const options = []
-    if (me) {
-      if (me.canWin) options.push({ type: 'win', tile: data.discardTile })
-      if (me.canKong) options.push({ type: 'kong', tile: data.discardTile })
-      if (me.canPong) options.push({ type: 'pong', tile: data.discardTile })
-      if (me.canChow) options.push({ type: 'chow', tile: data.discardTile })
-    }
-
-    if (options.length > 0) {
-      claimEligible.value = true
-      myClaimOptions.value = options
-      waitingClaimResolution.value = false
-    }
-  })
 
   // Sent to eligible player with claim details (chowOptions for chow)
   socket.on('claim_received', (data) => {
@@ -567,12 +568,6 @@ onMounted(() => {
     // data: { nextPlayer }
     clearClaimState()
     if (data.nextPlayer !== undefined) currentPlayer.value = data.nextPlayer
-  })
-
-  // Legacy fallback
-  socket.on('claim_applied', (data) => {
-    clearClaimState()
-    if (data.currentPlayer !== undefined) currentPlayer.value = data.currentPlayer
   })
 
   // === Tingpai ===
@@ -630,8 +625,8 @@ onUnmounted(() => {
   stopBGM()
   const events = [
     'game_started', 'game_state_update', 'tile_drawn', 'player_drew',
-    'tile_discarded', 'claim_window_opened', 'claim_received', 'can_claim',
-    'claim_resolved', 'claim_declined', 'claim_applied', 'tingpai_result',
+    'tile_discarded', 'claim_received', 'can_claim',
+    'claim_resolved', 'claim_declined', 'tingpai_result',
     'game_over', 'quick_chat', 'error'
   ]
   events.forEach(e => socket.off(e))
@@ -698,8 +693,6 @@ function drawTile() {
 function discardSelected() {
   if (!selectedTile.value) return
   socket.emit('discard_tile', { roomId: roomId.value, tile: selectedTile.value })
-  const idx = myHand.value.indexOf(selectedTile.value)
-  if (idx !== -1) myHand.value.splice(idx, 1)
   selectedTile.value = null
   selectedIndex.value = -1
   currentDrawnTile.value = null
