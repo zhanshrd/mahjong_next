@@ -1,24 +1,12 @@
 services:
-  backend:
+  app:
     build:
-      context: ./backend
+      context: .
       args:
         NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
     environment:
       NODE_ENV: production
       PORT: 3001
-    expose:
-      - "3001"
-    restart: unless-stopped
-
-  frontend:
-    build:
-      context: ./frontend
-      args:
-        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
-    depends_on:
-      backend:
-        condition: service_healthy
     ports:
-      - "${FRONTEND_PORT:-3001}:80"
+      - "${APP_PORT:-3001}:3001"
     restart: unless-stopped

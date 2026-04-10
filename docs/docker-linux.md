@@ -1,6 +1,6 @@
 # Linux Docker 部署
 
-这个项目现在可以直接通过 Docker Compose 在 Linux 上启动。
+这个项目现在可以直接通过单容器 Docker Compose 在 Linux 上启动。
 
 ## 前置要求
 
@@ -15,7 +15,7 @@ docker compose up --build -d
 
 启动后：
 
-- 前端地址：`http://localhost:3001`
+- 访问地址：`http://localhost:3001`
 - 健康检查地址：`http://localhost:3001/api/health`
 
 ## 停止项目
@@ -27,7 +27,7 @@ docker compose down
 ## 自定义端口
 
 ```bash
-FRONTEND_PORT=3001 docker compose up --build -d
+APP_PORT=3001 docker compose up --build -d
 ```
 
 ## 自定义 npm 镜像源
@@ -46,6 +46,6 @@ NPM_REGISTRY=https://registry.npmjs.org docker compose build
 
 ## 说明
 
-- 前端由 Nginx 托管，并通过反向代理转发 `/api` 和 `/socket.io` 到后端服务
+- Docker 会先构建前端，再由后端统一提供静态页面、`/api` 和 `/socket.io`
 - 当前端没有设置 `VITE_SOCKET_URL` 时，会默认使用浏览器当前访问域名，适合 Docker 部署
-- 前后端 Docker 构建阶段都支持通过 `NPM_REGISTRY` 覆盖 npm 源
+- Docker 构建阶段支持通过 `NPM_REGISTRY` 覆盖 npm 源

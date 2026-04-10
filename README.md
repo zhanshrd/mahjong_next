@@ -282,11 +282,9 @@ npm test
 
 ## 🌐 部署
 
-### Docker 部署（后端）
+### Docker 部署（单容器）
 
 ```bash
-cd backend
-
 # 构建镜像
 docker build -t mahjong-next .
 
