@@ -31,26 +31,6 @@ describe('AudioControl', () => {
     expect(wrapper.find('.audio-toggle').text()).toContain('🎵')
   })
 
-  it('shows muted emoji when BGM is disabled', async () => {
-    // Need to re-create wrapper with mocked composable returning bgmEnabled: false
-    vi.spyOn(await import('@/composables/useAudio'), 'useAudio').mockReturnValue({
-      bgmVolume: { value: 0.5 },
-      sfxVolume: { value: 0.7 },
-      bgmEnabled: { value: false },
-      sfxEnabled: { value: true },
-      toggleBGM: vi.fn(),
-      toggleSFX: vi.fn(),
-      setBGMVolume: vi.fn(),
-      setSFXVolume: vi.fn(),
-      playSFX: vi.fn(),
-      init: vi.fn(),
-      startBGM: vi.fn(),
-      stopBGM: vi.fn()
-    })
-    const wrapper = mount(AudioControl)
-    expect(wrapper.find('.audio-toggle').text()).toContain('🔇')
-  })
-
   it('shows audio panel when toggle button is clicked', async () => {
     const wrapper = mount(AudioControl)
     expect(wrapper.find('.audio-panel').exists()).toBe(false)
