@@ -273,6 +273,11 @@ export class MahjongGame {
       return { success: false, reason: 'CANNOT_CLOWN_OWN_DISCARD' };
     }
 
+    // Validate chow tiles
+    if (claimType === 'chow' && (!chowTiles || chowTiles.length !== 2)) {
+      return { success: false, reason: 'INVALID_CHOW_TILES' };
+    }
+
     // Record the claim
     this.claimWindow.claims.set(playerIndex, { type: claimType, chowTiles: chowTiles || null });
 

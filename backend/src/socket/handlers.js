@@ -43,6 +43,12 @@ export function setupSocketHandlers(io) {
   io.on('connection', (socket) => {
     console.log('Player connected:', socket.id);
 
+    // Helper: broadcast updated lobby room list to all connected sockets
+    function broadcastLobbyUpdate() {
+      const rooms = gameStore.getLobbyRooms();
+      io.emit('lobby_update', { rooms });
+    }
+
     // --- Room Management ---
 
     socket.on('create_room', (data) => {
@@ -68,9 +74,11 @@ export function setupSocketHandlers(io) {
           roomId: room.id,
           players: room.players,
           isCreator: true,
-          options: room.options
+          options: room.options,
+          sessionId: result.sessionId
         });
         console.log(`Room created: ${room.id} by ${socket.id}`);
+        broadcastLobbyUpdate();
       }
     });
 
@@ -93,12 +101,14 @@ export function setupSocketHandlers(io) {
           roomId: formattedId,
           players: result.room.players,
           isCreator: result.room.isCreator(socket.id),
-          options: result.room.options
+          options: result.room.options,
+          sessionId: result.sessionId
         });
         io.to(formattedId).emit('player_joined', {
           players: result.room.players
         });
         console.log(`Player ${socket.id} joined room ${formattedId}`);
+        broadcastLobbyUpdate();
       } else {
         socket.emit('join_failed', { reason: result.reason });
       }
@@ -112,6 +122,51 @@ export function setupSocketHandlers(io) {
           players: result.room.players,
           playerId: socket.id
         });
+        broadcastLobbyUpdate();
+      }
+    });
+
+    // --- Lobby ---
+
+    socket.on('lobby_join', () => {
+      socket.emit('lobby_update', { rooms: gameStore.getLobbyRooms() });
+    });
+
+    socket.on('lobby_leave', () => {
+    });
+
+    socket.on('quick_join', ({ name }) => {
+      if (!name || !name.trim()) {
+        socket.emit('error', { message: '请输入昵称' });
+        return;
+      }
+
+      // Leave existing room first
+      const existing = gameStore.leaveRoom(socket.id);
+      if (existing && existing.room) {
+        socket.leave(existing.room.id);
+        io.to(existing.room.id).emit('player_left', {
+          players: existing.room.players,
+          playerId: socket.id
+        });
+      }
+
+      const result = gameStore.quickJoin({ id: socket.id, name: name.trim() });
+
+      if (result.success) {
+        socket.join(result.room.id);
+        socket.emit('join_success', {
+          roomId: result.room.id,
+          players: result.room.players,
+          isCreator: result.room.isCreator(socket.id),
+          options: result.room.options
+        });
+        io.to(result.room.id).emit('player_joined', {
+          players: result.room.players
+        });
+        broadcastLobbyUpdate();
+      } else {
+        socket.emit('join_failed', { reason: 'NO_AVAILABLE_ROOM' });
       }
     });
 
@@ -143,6 +198,7 @@ export function setupSocketHandlers(io) {
           });
         }
         console.log(`Game started in room ${roomId}`);
+        broadcastLobbyUpdate();
       } else {
         socket.emit('error', { message: 'Cannot start game (need 4 players or already started)' });
       }
@@ -508,16 +564,79 @@ export function setupSocketHandlers(io) {
       });
     });
 
+    // --- Reconnection ---
+
+    socket.on('reconnect_request', ({ sessionId, roomId }) => {
+      if (!sessionId || !roomId) {
+        socket.emit('reconnect_failed', { reason: 'MISSING_PARAMS' });
+        return;
+      }
+
+      const result = gameStore.reconnect(socket.id, sessionId, roomId);
+
+      if (result.success) {
+        const room = result.room;
+        socket.join(room.id);
+
+        // Notify others the player reconnected
+        io.to(room.id).emit('player_reconnected', {
+          playerIndex: result.playerIndex,
+          playerName: room.players[result.playerIndex].name
+        });
+
+        // Send full current state to the reconnected player
+        if (room.state === 'playing' && room.game) {
+          const state = room.game.getStateForPlayer(result.playerIndex);
+          socket.emit('reconnect_success', {
+            playerIndex: result.playerIndex,
+            roomState: room.state,
+            roomId: room.id,
+            players: room.players,
+            options: room.options,
+            isCreator: room.isCreator(socket.id),
+            matchSession: room.matchSession ? room.matchSession.getState() : null
+          });
+          // Send game state update separately for the game page
+          state.playerIndex = result.playerIndex;
+          socket.emit('game_state_update', state);
+        } else {
+          // In waiting room
+          socket.emit('reconnect_success', {
+            playerIndex: result.playerIndex,
+            roomState: room.state,
+            roomId: room.id,
+            players: room.players,
+            options: room.options,
+            isCreator: room.isCreator(socket.id)
+          });
+        }
+
+        console.log(`Player ${socket.id} reconnected to room ${roomId} via session ${sessionId} as index ${result.playerIndex}`);
+      } else {
+        socket.emit('reconnect_failed', { reason: result.reason });
+      }
+    });
+
     // --- Disconnect ---
 
     socket.on('disconnect', () => {
       console.log('Player disconnected:', socket.id);
-      const result = gameStore.leaveRoom(socket.id);
+      const result = gameStore.handleDisconnect(socket.id);
       if (result && result.room) {
-        io.to(result.room.id).emit('player_left', {
-          players: result.room.players,
-          playerId: socket.id
-        });
+        if (result.deferred) {
+          // Player is in a game - notify others but don't remove yet
+          io.to(result.room.id).emit('player_disconnected', {
+            playerIndex: result.playerIndex,
+            playerName: result.playerName
+          });
+        } else {
+          // Player left from waiting room
+          io.to(result.room.id).emit('player_left', {
+            players: result.room.players,
+            playerId: socket.id
+          });
+          broadcastLobbyUpdate();
+        }
       }
     });
   });

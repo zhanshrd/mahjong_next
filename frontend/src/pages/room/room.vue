@@ -50,7 +50,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getSocket } from '@/utils/socket'
+import { getSocket, getSavedSession, clearSession, saveSession } from '@/utils/socket'
 import { useToast } from '@/composables/useToast'
 import { useGameStore } from '@/store/game'
 
@@ -98,6 +98,21 @@ function handleRoomState(data) {
   syncRoomOptions(data.options)
 }
 
+function handleReconnectResult(data) {
+  if (data.success) {
+    if (data.players) players.value = [...data.players]
+    if (data.isCreator !== undefined) isCreator.value = data.isCreator
+    if (data.roomState === 'playing') {
+      // Game already started, redirect to game page
+      router.push(`/game/${roomId.value}`)
+    }
+  } else {
+    // Reconnection failed, go back to lobby
+    clearSession()
+    router.push('/')
+  }
+}
+
 onMounted(() => {
   if (gameStore.players.length > 0) {
     players.value = [...gameStore.players]
@@ -109,8 +124,19 @@ onMounted(() => {
   socket.on('player_left', handlePlayerLeft)
   socket.on('game_started', handleGameStarted)
   socket.on('room_state', handleRoomState)
+  socket.on('reconnect_success', handleReconnectResult)
+  socket.on('reconnect_failed', handleReconnectResult)
 
-  socket.emit('get_room_state', { roomId: roomId.value })
+  // Try to reconnect if we have a saved session
+  const saved = getSavedSession()
+  if (saved && saved.roomId === roomId.value) {
+    socket.emit('reconnect_request', {
+      sessionId: saved.sessionId,
+      roomId: saved.roomId
+    })
+  } else {
+    socket.emit('get_room_state', { roomId: roomId.value })
+  }
 })
 
 onUnmounted(() => {
@@ -118,6 +144,8 @@ onUnmounted(() => {
   socket.off('player_left', handlePlayerLeft)
   socket.off('game_started', handleGameStarted)
   socket.off('room_state', handleRoomState)
+  socket.off('reconnect_success', handleReconnectResult)
+  socket.off('reconnect_failed', handleReconnectResult)
 })
 
 function startGame() {
@@ -126,6 +154,7 @@ function startGame() {
 
 function leaveRoom() {
   socket.emit('leave_room')
+  clearSession()
   router.push('/')
 }
 

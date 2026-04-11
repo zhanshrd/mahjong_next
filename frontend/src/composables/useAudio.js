@@ -7,6 +7,8 @@ const sfxEnabled = ref(localStorage.getItem('mahjong_sfx_on') !== 'false')
 
 let bgmElement = null
 const sfxCache = {}
+let audioInitialized = false
+let audioUnlocked = false
 
 function savePrefs() {
   localStorage.setItem('mahjong_bgm_vol', bgmVolume.value)
@@ -15,8 +17,33 @@ function savePrefs() {
   localStorage.setItem('mahjong_sfx_on', sfxEnabled.value)
 }
 
+function unlockAudio() {
+  if (audioUnlocked) return
+  // Create and immediately play a silent buffer to unlock audio context
+  try {
+    const silent = new Audio()
+    silent.play().then(() => {
+      audioUnlocked = true
+    }).catch(() => {})
+  } catch (e) {
+    // Ignore
+  }
+}
+
 export function useAudio() {
   function init() {
+    if (audioInitialized) return
+    audioInitialized = true
+
+    // Unlock audio on first user interaction
+    const unlockHandler = () => {
+      unlockAudio()
+      document.removeEventListener('click', unlockHandler)
+      document.removeEventListener('touchstart', unlockHandler)
+    }
+    document.addEventListener('click', unlockHandler, { once: true })
+    document.addEventListener('touchstart', unlockHandler, { once: true })
+
     // Preload sound effects
     const sfxNames = ['draw', 'discard', 'chow', 'pong', 'kong', 'win', 'tingpai']
     for (const name of sfxNames) {

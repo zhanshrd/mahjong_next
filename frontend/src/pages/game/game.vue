@@ -37,6 +37,7 @@
           :key="'td'+i"
           :tile="tile"
           small
+          :rotation="180"
           :class="{ 'last-discard': isLastDiscard(topPlayerIdx, tile, i) }"
         />
       </div>
@@ -67,6 +68,7 @@
             :key="'ld'+i"
             :tile="tile"
             small
+            :rotation="90"
             :class="{ 'last-discard': isLastDiscard(leftPlayerIdx, tile, i) }"
           />
         </div>
@@ -76,15 +78,15 @@
       <div class="center-area">
         <!-- Wind compass indicator -->
         <div class="wind-compass">
-          <div class="wind-ring">
-            <span class="wind-pos wind-north" :class="{ active: currentPlayer === northIdx }">{{ windLabel(northIdx) }}</span>
-            <span class="wind-pos wind-east" :class="{ active: currentPlayer === eastIdx }">{{ windLabel(eastIdx) }}</span>
-            <span class="wind-pos wind-south" :class="{ active: currentPlayer === southIdx }">{{ windLabel(southIdx) }}</span>
-            <span class="wind-pos wind-west" :class="{ active: currentPlayer === westIdx }">{{ windLabel(westIdx) }}</span>
-          </div>
-          <div class="compass-center">
-            <span class="tiles-count">{{ tilesLeft }}</span>
-            <span class="tiles-label">余</span>
+          <div class="compass-grid">
+            <span class="wind-pos wind-north" :class="{ active: currentPlayer === topPlayerIdx }">{{ windLabel(topPlayerIdx) }}</span>
+            <span class="wind-pos wind-west" :class="{ active: currentPlayer === leftPlayerIdx }">{{ windLabel(leftPlayerIdx) }}</span>
+            <div class="compass-center">
+              <span class="tiles-count">{{ tilesLeft }}</span>
+              <span class="tiles-label">余</span>
+            </div>
+            <span class="wind-pos wind-east" :class="{ active: currentPlayer === rightPlayerIdx }">{{ windLabel(rightPlayerIdx) }}</span>
+            <span class="wind-pos wind-south" :class="{ active: currentPlayer === myIndex }">{{ windLabel(myIndex) }}</span>
           </div>
         </div>
       </div>
@@ -112,6 +114,7 @@
             :key="'rd'+i"
             :tile="tile"
             small
+            :rotation="270"
             :class="{ 'last-discard': isLastDiscard(rightPlayerIdx, tile, i) }"
           />
         </div>
@@ -189,10 +192,10 @@
       <div class="claim-title">可声明</div>
 
       <!-- Chow combo selector -->
-      <div class="chow-selector" v-if="showChowSelector && chowOptions.length > 0">
+      <div class="chow-selector" v-if="showChowSelector && chowDisplayTiles.length > 0">
         <div class="chow-hint">选择吃牌组合：</div>
         <div
-          v-for="(combo, ci) in chowOptions"
+          v-for="(combo, ci) in chowDisplayTiles"
           :key="'chow-'+ci"
           class="chow-combo"
           :class="{ selected: selectedChowCombo === ci }"
@@ -294,7 +297,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getSocket } from '@/utils/socket'
+import { getSocket, getSavedSession, clearSession, saveSession } from '@/utils/socket'
 import { useGameStore } from '@/store/game.js'
 import { sortTiles } from '@/utils/tileSort.js'
 import { useAudio } from '@/composables/useAudio.js'
@@ -344,7 +347,8 @@ const playerDiscards = ref([[], [], [], []])
 // Claim system state
 const claimEligible = ref(false)
 const myClaimOptions = ref([]) // [{type: 'win'|'pong'|'chow', tile, chowOptions?}]
-const chowOptions = ref([])    // [[tile1, tile2], ...] when chow is available
+const chowDisplayTiles = ref([]) // [[t1, t2, t3], ...] for display in selector (3 tiles each)
+const chowCompanionTiles = ref([]) // [[comp1, comp2], ...] the 2 companion tiles to send to server
 const showChowSelector = ref(false)
 const selectedChowCombo = ref(-1)
 const waitingClaimResolution = ref(false)
@@ -400,8 +404,9 @@ const mainHand = computed(() => {
 const isMyTurn = computed(() => currentPlayer.value === myIndex.value)
 
 // Auto-draw: when it's my turn and I haven't drawn, draw automatically
-watch([isMyTurn, hasDrawn], ([myTurn, drawn]) => {
-  if (myTurn && !drawn && !finished.value && !claimEligible.value) {
+// Also watch claimEligible so that when claim window closes (pass), auto-draw triggers
+watch([isMyTurn, hasDrawn, claimEligible], ([myTurn, drawn, claiming]) => {
+  if (myTurn && !drawn && !finished.value && !claiming) {
     setTimeout(() => {
       if (isMyTurn.value && !hasDrawn.value && !finished.value && !claimEligible.value) {
         drawTile()
@@ -427,12 +432,7 @@ const rightPlayerIdx = computed(() => (myIndex.value + 1) % 4)
 const topPlayerIdx = computed(() => (myIndex.value + 2) % 4)
 const leftPlayerIdx = computed(() => (myIndex.value + 3) % 4)
 
-// Wind positions: 0=East, 1=South, 2=West, 3=North
-const eastIdx = computed(() => 0)
-const southIdx = computed(() => 1)
-const westIdx = computed(() => 2)
-const northIdx = computed(() => 3)
-
+// Wind label by absolute player index
 function windLabel(idx) {
   const labels = { 0: '东', 1: '南', 2: '西', 3: '北' }
   return labels[idx] || ''
@@ -540,27 +540,49 @@ onMounted(() => {
 
   // Sent to eligible player with claim details (chowOptions for chow)
   socket.on('claim_received', (data) => {
-    // data: { type, tile, fromPlayer, chowOptions: [[tile1,tile2],...] }
+    // data: { type, tile, fromPlayer, chowOptions: [{ tiles, missing },...] }
     if (data.type === 'chow' && data.chowOptions && data.chowOptions.length > 0) {
-      chowOptions.value = data.chowOptions
+      chowDisplayTiles.value = data.chowOptions.map(opt =>
+        Array.isArray(opt) ? opt : (opt.tiles || [])
+      )
+      chowCompanionTiles.value = data.chowOptions.map(opt =>
+        Array.isArray(opt) ? opt : (opt.missing || [])
+      )
     }
   })
 
-  // Legacy fallback: can_claim (some backends still send this)
+  // Main claim notification with claim options
   socket.on('can_claim', (data) => {
     const claims = data.claims || [{ type: data.type, tile: data.tile }]
     claimEligible.value = true
     myClaimOptions.value = claims
     waitingClaimResolution.value = false
+    // Extract chowOptions from the claim data for the chow selector
+    const chowClaim = claims.find(c => c.type === 'chow')
+    if (chowClaim && chowClaim.chowOptions && chowClaim.chowOptions.length > 0) {
+      // chowOptions from backend: [{ tiles: [t1,t2,t3], missing: [comp1,comp2] }, ...]
+      chowDisplayTiles.value = chowClaim.chowOptions.map(opt =>
+        Array.isArray(opt) ? opt : (opt.tiles || [])
+      )
+      chowCompanionTiles.value = chowClaim.chowOptions.map(opt =>
+        Array.isArray(opt) ? opt : (opt.missing || [])
+      )
+    }
   })
 
-  // Broadcast: a claim was resolved (someone won/ponged/chowed)
+  // Broadcast: a claim was resolved (someone won/ponged/chowed/passed)
   socket.on('claim_resolved', (data) => {
     if (data.type === 'pong') playSFX('pong')
     else if (data.type === 'chow') playSFX('chow')
     else if (data.type === 'kong') playSFX('kong')
     clearClaimState()
     if (data.currentPlayer !== undefined) currentPlayer.value = data.currentPlayer
+    // When all players pass, nextPlayer needs to draw - update currentPlayer
+    // so the auto-draw watcher triggers for the next player
+    if (data.type === 'pass' && data.nextPlayer !== undefined) {
+      currentPlayer.value = data.nextPlayer
+      hasDrawn.value = false
+    }
   })
 
   // Broadcast: all players declined, next player's turn
@@ -614,11 +636,61 @@ onMounted(() => {
     console.error('Game error:', data.message)
   })
 
+  // Player disconnected notification
+  socket.on('player_disconnected', (data) => {
+    if (data.playerName) {
+      // Could show a notification
+      console.log(`Player ${data.playerName} disconnected`)
+    }
+  })
+
+  // Player reconnected notification
+  socket.on('player_reconnected', (data) => {
+    if (data.playerName) {
+      console.log(`Player ${data.playerName} reconnected`)
+    }
+  })
+
+  // Reconnect success handler
+  socket.on('reconnect_success', (data) => {
+    myIndex.value = data.playerIndex
+    if (data.players) players.value = data.players
+    if (data.options) {
+      if (data.options.totalRounds) totalRounds.value = data.options.totalRounds
+    }
+    if (data.isCreator !== undefined) isCreator.value = data.isCreator
+    if (data.matchSession) {
+      roundNumber.value = data.matchSession.currentRound
+      totalRounds.value = data.matchSession.totalRounds
+      dealerIndex.value = data.matchSession.dealerIndex
+      roundWindName.value = data.matchSession.roundWindName
+      matchRunningScores.value = data.matchSession.runningScores
+      matchFinished.value = data.matchSession.finished
+    }
+    store.gamePhase = 'playing'
+    saveSession(data.roomId, getSavedSession()?.sessionId || '')
+  })
+
+  // Reconnect failed handler
+  socket.on('reconnect_failed', () => {
+    clearSession()
+    store.reset()
+    router.push('/')
+  })
+
   // Landscape detection
   window.addEventListener('resize', onResize)
 
-  // Request game state
-  socket.emit('get_game_state', { roomId: roomId.value })
+  // Try to reconnect if we have a saved session, otherwise just request state
+  const saved = getSavedSession()
+  if (saved && saved.roomId === roomId.value) {
+    socket.emit('reconnect_request', {
+      sessionId: saved.sessionId,
+      roomId: saved.roomId
+    })
+  } else {
+    socket.emit('get_game_state', { roomId: roomId.value })
+  }
 })
 
 onUnmounted(() => {
@@ -627,7 +699,8 @@ onUnmounted(() => {
     'game_started', 'game_state_update', 'tile_drawn', 'player_drew',
     'tile_discarded', 'claim_received', 'can_claim',
     'claim_resolved', 'claim_declined', 'tingpai_result',
-    'game_over', 'quick_chat', 'error'
+    'game_over', 'quick_chat', 'error',
+    'player_disconnected', 'player_reconnected', 'reconnect_success', 'reconnect_failed'
   ]
   events.forEach(e => socket.off(e))
   window.removeEventListener('resize', onResize)
@@ -640,7 +713,8 @@ function onResize() {
 function clearClaimState() {
   claimEligible.value = false
   myClaimOptions.value = []
-  chowOptions.value = []
+  chowDisplayTiles.value = []
+  chowCompanionTiles.value = []
   showChowSelector.value = false
   selectedChowCombo.value = -1
   waitingClaimResolution.value = false
@@ -707,13 +781,13 @@ function requestTingpai() {
 
 function onClaimClick(claimType) {
   if (claimType === 'chow') {
-    // If we have chowOptions from claim_received, show selector
-    if (chowOptions.value.length > 1) {
+    // If we have multiple chow combos, show selector
+    if (chowDisplayTiles.value.length > 1) {
       showChowSelector.value = true
       selectedChowCombo.value = 0
-    } else if (chowOptions.value.length === 1) {
-      // Only one combo, auto-select
-      doClaim('chow', chowOptions.value[0])
+    } else if (chowCompanionTiles.value.length === 1) {
+      // Only one combo, auto-select using companion tiles
+      doClaim('chow', chowCompanionTiles.value[0])
     } else {
       // No chowOptions received yet, send claim and server will handle
       doClaim('chow')
@@ -734,8 +808,8 @@ function doClaim(claimType, chowTiles) {
 }
 
 function confirmChow() {
-  if (selectedChowCombo.value < 0 || selectedChowCombo.value >= chowOptions.value.length) return
-  doClaim('chow', chowOptions.value[selectedChowCombo.value])
+  if (selectedChowCombo.value < 0 || selectedChowCombo.value >= chowCompanionTiles.value.length) return
+  doClaim('chow', chowCompanionTiles.value[selectedChowCombo.value])
 }
 
 function cancelChowSelect() {
@@ -764,6 +838,7 @@ function goToScoreboard() {
 
 function goHome() {
   socket.emit('leave_room')
+  clearSession()
   store.reset()
   router.push('/')
 }
@@ -779,7 +854,7 @@ function nextRound() {
 .game-table {
   width: 100vw;
   height: 100vh;
-  background: linear-gradient(135deg, #1a472a 0%, #0d3320 50%, #0a2a18 100%);
+  background: var(--table-bg, linear-gradient(135deg, #1a472a 0%, #0d3320 50%, #0a2a18 100%));
   position: relative;
   overflow: hidden;
   display: flex;
@@ -919,6 +994,15 @@ function nextRound() {
   z-index: 1;
 }
 
+/* ===== Center area ===== */
+.center-area {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  min-width: 0;
+}
+
 /* ===== Wind compass ===== */
 .wind-compass {
   position: relative;
@@ -927,56 +1011,59 @@ function nextRound() {
   flex-shrink: 0;
 }
 
-.wind-ring {
-  position: absolute;
-  inset: 0;
+.compass-grid {
+  display: grid;
+  grid-template-columns: 36px 1fr 36px;
+  grid-template-rows: 36px 1fr 36px;
+  width: 100%;
+  height: 100%;
+  place-items: center;
 }
 
 .wind-pos {
-  position: absolute;
   font-size: 14px;
   font-weight: 700;
   color: #5a7a5a;
   transition: all 0.3s;
-  padding: 2px 6px;
-  border-radius: 6px;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.2);
 }
 
 .wind-pos.active {
   color: #f0d060;
-  background: rgba(240, 208, 96, 0.15);
+  background: rgba(240, 208, 96, 0.2);
   text-shadow: 0 0 8px rgba(240, 208, 96, 0.5);
+  box-shadow: 0 0 10px rgba(240, 208, 96, 0.3);
 }
 
 .wind-north {
-  top: 0;
-  left: 50%;
-  transform: translateX(-50%);
-}
-
-.wind-east {
-  top: 50%;
-  right: 0;
-  transform: translateY(-50%);
-}
-
-.wind-south {
-  bottom: 0;
-  left: 50%;
-  transform: translateX(-50%);
+  grid-column: 2;
+  grid-row: 1;
 }
 
 .wind-west {
-  top: 50%;
-  left: 0;
-  transform: translateY(-50%);
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.wind-east {
+  grid-column: 3;
+  grid-row: 2;
+}
+
+.wind-south {
+  grid-column: 2;
+  grid-row: 3;
 }
 
 .compass-center {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
+  grid-column: 2;
+  grid-row: 2;
   text-align: center;
   display: flex;
   flex-direction: column;
@@ -1003,32 +1090,29 @@ function nextRound() {
   padding: 3px;
   background: rgba(0, 0, 0, 0.12);
   border-radius: 6px;
+  overflow: hidden;
 }
 
 .discard-bottom {
   justify-content: center;
-  max-width: 320px;
+  max-width: 100%;
   margin: 0 auto 4px;
 }
 
 .discard-top {
   justify-content: center;
-  max-width: 280px;
+  max-width: 100%;
   margin: 0 auto;
 }
 
 .discard-left {
   justify-content: flex-start;
   max-width: 100px;
-  max-height: 160px;
-  overflow-y: auto;
 }
 
 .discard-right {
   justify-content: flex-end;
   max-width: 100px;
-  max-height: 160px;
-  overflow-y: auto;
 }
 
 /* Highlight last discard */
@@ -1399,8 +1483,15 @@ function nextRound() {
     height: 90px;
   }
 
+  .compass-grid {
+    grid-template-columns: 28px 1fr 28px;
+    grid-template-rows: 28px 1fr 28px;
+  }
+
   .wind-pos {
     font-size: 12px;
+    width: 26px;
+    height: 26px;
   }
 
   .tiles-count {
@@ -1426,16 +1517,15 @@ function nextRound() {
   }
 
   .discard-bottom {
-    max-width: 260px;
+    max-width: 100%;
   }
 
   .discard-top {
-    max-width: 220px;
+    max-width: 100%;
   }
 
   .discard-left,
   .discard-right {
-    max-height: 120px;
     max-width: 80px;
   }
 }

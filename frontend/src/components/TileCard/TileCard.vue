@@ -8,6 +8,7 @@
       mini,
       selectable
     }"
+    :style="rotationStyle"
     @click="handleClick"
   >
     <template v-if="mini">
@@ -41,10 +42,18 @@ const props = defineProps({
   small: { type: Boolean, default: false },
   mini: { type: Boolean, default: false },
   miniCount: { type: Number, default: 0 },
-  selected: { type: Boolean, default: false }
+  selected: { type: Boolean, default: false },
+  rotation: { type: Number, default: 0 }
 })
 
 const emit = defineEmits(['click'])
+
+const rotationStyle = computed(() => {
+  if (props.rotation && props.rotation !== 0) {
+    return { transform: `rotate(${props.rotation}deg)` }
+  }
+  return {}
+})
 
 const tileSuitClass = computed(() => {
   if (!props.tile) return ''
@@ -220,7 +229,7 @@ function handleClick() {
 
 /* ===== Tile back ===== */
 .tile-card.back-side {
-  background: linear-gradient(145deg, #1a5c2e, #0d3d1a);
+  background: var(--tile-back, linear-gradient(145deg, #1a5c2e, #0d3d1a));
   border: 1px solid rgba(255, 255, 255, 0.1);
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
 }

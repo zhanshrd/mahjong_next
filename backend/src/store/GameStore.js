@@ -1,10 +1,18 @@
 import { Room } from '../game/Room.js';
 import { randomBytes } from 'crypto';
 
+// Grace period before a disconnected player is fully removed (ms)
+const RECONNECT_GRACE_MS = 60000;
+
 export class GameStore {
   constructor() {
     this.rooms = new Map();
     this.playerRooms = new Map(); // socketId -> roomId
+    // Disconnected players eligible for reconnection: sessionId -> { roomId, playerIndex, playerName, oldSocketId, timestamp }
+    this.disconnectedPlayers = new Map();
+    this.reconnectTimers = new Map(); // sessionId -> timeoutId
+    // Map socketId -> sessionId for lookup on disconnect
+    this.socketSessions = new Map(); // socketId -> sessionId
   }
 
   createRoom(creatorId, options = {}) {
@@ -38,7 +46,12 @@ export class GameStore {
     }
 
     this.playerRooms.set(player.id, roomId);
-    return { success: true, room };
+
+    // Generate a sessionId for this player
+    const sessionId = this._generateSessionId();
+    this.socketSessions.set(player.id, sessionId);
+
+    return { success: true, room, sessionId };
   }
 
   leaveRoom(socketId) {
@@ -61,6 +74,138 @@ export class GameStore {
     return { room, removedPlayer };
   }
 
+  // Called when a player disconnects. For in-game players, defer removal to allow reconnection.
+  handleDisconnect(socketId) {
+    const roomId = this.playerRooms.get(socketId);
+    if (!roomId) return null;
+
+    const room = this.rooms.get(roomId);
+    if (!room) {
+      this.playerRooms.delete(socketId);
+      this.socketSessions.delete(socketId);
+      return null;
+    }
+
+    const playerIndex = room.getPlayerIndex(socketId);
+
+    // If game is in progress, defer removal to allow reconnection
+    if (room.state === 'playing' && playerIndex !== -1) {
+      const playerName = room.players[playerIndex].name;
+      const sessionId = this.socketSessions.get(socketId);
+
+      if (sessionId) {
+        this.disconnectedPlayers.set(sessionId, {
+          roomId,
+          playerIndex,
+          playerName,
+          oldSocketId: socketId,
+          timestamp: Date.now()
+        });
+
+        // Clear any existing timer for this session
+        if (this.reconnectTimers.has(sessionId)) {
+          clearTimeout(this.reconnectTimers.get(sessionId));
+        }
+
+        // Set a timer to fully remove the player after grace period
+        const timerId = setTimeout(() => {
+          this._removeDisconnectedPlayer(sessionId);
+        }, RECONNECT_GRACE_MS);
+
+        this.reconnectTimers.set(sessionId, timerId);
+      }
+
+      this.playerRooms.delete(socketId);
+      this.socketSessions.delete(socketId);
+
+      return { room, playerIndex, playerName, sessionId, deferred: true };
+    }
+
+    // For waiting rooms, remove immediately
+    this.socketSessions.delete(socketId);
+    const result = this.leaveRoom(socketId);
+    return result ? { ...result, deferred: false } : null;
+  }
+
+  // Attempt to reconnect a player using sessionId + roomId
+  reconnect(newSocketId, sessionId, roomId) {
+    const info = this.disconnectedPlayers.get(sessionId);
+    if (!info || info.roomId !== roomId) {
+      return { success: false, reason: 'NO_SESSION_FOUND' };
+    }
+
+    // Reject if the grace period has expired (defense-in-depth against timer race)
+    if (Date.now() - info.timestamp > RECONNECT_GRACE_MS) {
+      this._cleanupDisconnectEntry(sessionId);
+      this._removeDisconnectedPlayer(sessionId);
+      return { success: false, reason: 'GRACE_PERIOD_EXPIRED' };
+    }
+
+    const room = this.rooms.get(roomId);
+    if (!room) {
+      this._cleanupDisconnectEntry(sessionId);
+      return { success: false, reason: 'ROOM_NOT_FOUND' };
+    }
+
+    // Check the player is still in the room
+    if (room.players.length <= info.playerIndex || room.players[info.playerIndex].id !== info.oldSocketId) {
+      this._cleanupDisconnectEntry(sessionId);
+      return { success: false, reason: 'PLAYER_SLOT_TAKEN' };
+    }
+
+    // Re-map the player to the new socket ID
+    room.players[info.playerIndex] = { id: newSocketId, name: info.playerName };
+    this.playerRooms.set(newSocketId, roomId);
+    this.socketSessions.set(newSocketId, sessionId);
+
+    // Update creatorId if this player was the creator
+    if (room.creatorId === info.oldSocketId) {
+      room.creatorId = newSocketId;
+    }
+
+    // Clean up disconnect entry
+    this._cleanupDisconnectEntry(sessionId);
+
+    return {
+      success: true,
+      room,
+      playerIndex: info.playerIndex
+    };
+  }
+
+  _cleanupDisconnectEntry(sessionId) {
+    this.disconnectedPlayers.delete(sessionId);
+    if (this.reconnectTimers.has(sessionId)) {
+      clearTimeout(this.reconnectTimers.get(sessionId));
+      this.reconnectTimers.delete(sessionId);
+    }
+  }
+
+  _removeDisconnectedPlayer(sessionId) {
+    const info = this.disconnectedPlayers.get(sessionId);
+    if (!info) return;
+
+    const room = this.rooms.get(info.roomId);
+    if (room) {
+      room.removePlayer(info.oldSocketId);
+      if (room.isEmpty()) {
+        this.rooms.delete(info.roomId);
+      }
+    }
+
+    this._cleanupDisconnectEntry(sessionId);
+  }
+
+  _generateSessionId() {
+    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    let id = '';
+    const bytes = randomBytes(16);
+    for (let i = 0; i < 16; i++) {
+      id += chars[bytes[i] % chars.length];
+    }
+    return id;
+  }
+
   _generateRoomId() {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     let id = '';
@@ -78,6 +223,42 @@ export class GameStore {
 
   getRoomCount() {
     return this.rooms.size;
+  }
+
+  // Get all rooms visible in the lobby (waiting state with available slots)
+  getLobbyRooms() {
+    const lobbyRooms = [];
+    for (const room of this.rooms.values()) {
+      if (room.state === 'waiting' && !room.isFull()) {
+        lobbyRooms.push({
+          id: room.id,
+          players: room.players.map(p => ({ name: p.name })),
+          playerCount: room.players.length,
+          maxPlayers: 4,
+          options: {
+            totalRounds: room.options.totalRounds,
+            hasPassword: room.options.roomPassword !== '8888'
+          },
+          createdAt: room.createdAt
+        });
+      }
+    }
+    // Sort newest first
+    lobbyRooms.sort((a, b) => b.createdAt - a.createdAt);
+    return lobbyRooms;
+  }
+
+  // Quick join: find the first available room and join it
+  quickJoin(player) {
+    for (const room of this.rooms.values()) {
+      if (room.state === 'waiting' && !room.isFull() && room.options.roomPassword === '8888') {
+        if (room.addPlayer(player)) {
+          this.playerRooms.set(player.id, room.id);
+          return { success: true, room };
+        }
+      }
+    }
+    return { success: false, reason: 'NO_AVAILABLE_ROOM' };
   }
 }
 
