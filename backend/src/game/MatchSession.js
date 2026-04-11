@@ -1,3 +1,8 @@
+import {
+  calculateBirdHits,
+  calculateBirdMultiplier
+} from './AdvancedRules.js';
+
 const BASE_SCORE = 10; // base score per fan
 
 export class MatchSession {
@@ -67,10 +72,32 @@ export class MatchSession {
   }
 
   // Record a multi-win round (一炮多响): multiple winners from one discard
-  recordMultiWinRound(winners, isDraw, discarderIndex, birdMultiplier = 1) {
+  // Parameters:
+  //   winners: [{ playerIndex, fan: { fan, patterns } }, ...]
+  //   discarderIndex: the player who discarded the winning tile
+  //   birdMultiplierOrBirdTiles: either birdMultiplier (number) for backward compatibility,
+  //                              or birdTiles (array) for new API with automatic calculation
+  //   dealerIndex: current dealer position for bird hit calculation (only used with birdTiles)
+  recordMultiWinRound(winners, isDraw, discarderIndex, birdMultiplierOrBirdTiles = 1, dealerIndex = 0) {
     this.currentRound++;
 
     const scores = [0, 0, 0, 0];
+
+    // Determine bird multiplier: either passed directly or calculated from birdTiles
+    let birdHits = [];
+    let birdMultiplier = 1;
+
+    if (Array.isArray(birdMultiplierOrBirdTiles)) {
+      // New API: birdTiles array passed
+      const birdTiles = birdMultiplierOrBirdTiles;
+      if (birdTiles.length > 0) {
+        birdHits = calculateBirdHits(birdTiles, dealerIndex, null, false);
+        birdMultiplier = calculateBirdMultiplier(birdHits, null, false, discarderIndex).multiplier;
+      }
+    } else {
+      // Backward compatibility: birdMultiplier number passed
+      birdMultiplier = birdMultiplierOrBirdTiles;
+    }
 
     if (!isDraw && winners.length > 0) {
       // Each winner scores independently, discarder pays all
@@ -97,7 +124,7 @@ export class MatchSession {
       multiWinners: winners.map(w => ({ playerIndex: w.playerIndex, fan: w.fan })),
       scores,
       dealer: this.dealerIndex,
-      birdHits: [],
+      birdHits,
       birdMultiplier
     });
 

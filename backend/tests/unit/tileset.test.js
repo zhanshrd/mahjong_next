@@ -82,4 +82,32 @@ describe('TileSet', () => {
     expect(prefixes.has('F')).toBe(true) // wind
     expect(prefixes.has('J')).toBe(true) // dragon
   })
+
+  it('should draw bird tile from back of deck', () => {
+    const ts = new TileSet()
+    ts.shuffle()
+    const initialRemaining = ts.remaining
+    const bird = ts.drawBird()
+    expect(bird).toBeTruthy()
+    expect(ts.remaining).toBe(initialRemaining - 1)
+  })
+
+  it('should return null when drawing bird with no tiles left', () => {
+    const ts = new TileSet()
+    // Drain all tiles
+    while (ts.remaining > 0) ts.drawOne()
+    expect(ts.drawBird()).toBeNull()
+  })
+
+  it('should draw multiple bird tiles', () => {
+    const ts = new TileSet()
+    ts.shuffle()
+    const birds = []
+    for (let i = 0; i < 4; i++) {
+      const bird = ts.drawBird()
+      if (bird) birds.push(bird)
+    }
+    expect(birds.length).toBe(4)
+    expect(ts.remaining).toBe(140)
+  })
 })

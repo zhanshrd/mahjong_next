@@ -119,8 +119,7 @@ export function calculateBirdHits(birdTiles, dealerIndex, winnerIndex, isSelfDra
     hits.push({
       bird,
       position,
-      isHit,
-      playerName: `Player${position}`
+      isHit
     });
   }
   

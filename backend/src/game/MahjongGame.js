@@ -110,6 +110,10 @@ export class MahjongGame {
    * @param {object} snapshot - The snapshot to restore (from getSnapshot()).
    */
   rollback(snapshot) {
+    // Preserve lock state and temporarily unlock for rollback
+    const wasLocked = this._fsm.isLocked();
+    if (wasLocked) this._fsm.unlock();
+
     this.hands = snapshot.hands.map(h => [...h]);
     this.melds = snapshot.melds.map(m => m.map(set => [...set]));
     this.flowerMelds = snapshot.flowerMelds.map(fm => [...fm]);
@@ -124,6 +128,9 @@ export class MahjongGame {
     this.multiWinResults = snapshot.multiWinResults;
     this.tileSet.restoreState(snapshot.tileSetState);
     this._fsm.phase = snapshot.phase;
+
+    // Restore lock state
+    if (wasLocked) this._fsm.lock();
 
     // Clear claim window on rollback
     this.claimWindow = null;

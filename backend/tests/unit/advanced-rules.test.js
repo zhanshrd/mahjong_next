@@ -132,6 +132,62 @@ describe('Advanced Rules', () => {
       expect(getBirdCount({ fan: 1 }, true)).toBe(2); // Self-draw
       expect(getBirdCount({ fan: 6 }, true)).toBe(4); // Big win
     });
+
+    it('should return 0 birds when fan is 0 (no win)', () => {
+      expect(getBirdCount({ fan: 0 }, false)).toBe(0);
+      expect(getBirdCount({ fan: 0 }, true)).toBe(0);
+    });
+
+    it('should return 4 birds for big win (fan >= 6)', () => {
+      expect(getBirdCount({ fan: 6 }, false)).toBe(4);
+      expect(getBirdCount({ fan: 7 }, false)).toBe(4);
+      expect(getBirdCount({ fan: 8 }, true)).toBe(4);
+    });
+
+    it('should return 1 bird for standard ron (fan 1-5)', () => {
+      expect(getBirdCount({ fan: 1 }, false)).toBe(1);
+      expect(getBirdCount({ fan: 3 }, false)).toBe(1);
+      expect(getBirdCount({ fan: 5 }, false)).toBe(1);
+    });
+  });
+
+  describe('calculateBirdMultiplier - multi-bird scenarios', () => {
+    it('should apply ×2 multiplier when multiple birds hit winner', () => {
+      const hits = [
+        { bird: 'W1', position: 0, isHit: true },
+        { bird: 'T5', position: 0, isHit: true },
+        { bird: 'D3', position: 1, isHit: false }
+      ];
+      const result = calculateBirdMultiplier(hits, 0, true, null);
+      expect(result.multiplier).toBe(2);
+      expect(result.hitCount).toBe(2);
+    });
+
+    it('should apply ×2 multiplier when one bird hits shooter in ron', () => {
+      const hits = [
+        { bird: 'W1', position: 2, isHit: true }, // hits shooter
+        { bird: 'T5', position: 1, isHit: false }
+      ];
+      const result = calculateBirdMultiplier(hits, 0, false, 2);
+      expect(result.multiplier).toBe(2);
+    });
+
+    it('should apply ×1 multiplier when no birds hit winner or shooter', () => {
+      const hits = [
+        { bird: 'W1', position: 1, isHit: true },
+        { bird: 'T5', position: 2, isHit: true }
+      ];
+      // Winner at 0, shooter at 3
+      const result = calculateBirdMultiplier(hits, 0, false, 3);
+      expect(result.multiplier).toBe(1);
+      expect(result.hitCount).toBe(2);
+    });
+
+    it('should handle empty bird hits', () => {
+      const result = calculateBirdMultiplier([], 0, true, null);
+      expect(result.multiplier).toBe(1);
+      expect(result.hitCount).toBe(0);
+    });
   });
 });
 

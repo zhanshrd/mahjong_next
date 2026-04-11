@@ -120,6 +120,14 @@ onMounted(() => {
     roomPassword.value = gameStore.roomPassword || '8888'
   }
 
+  // Cleanup any existing listeners before adding new ones to prevent duplicates
+  socket.off('player_joined', handlePlayerJoined)
+  socket.off('player_left', handlePlayerLeft)
+  socket.off('game_started', handleGameStarted)
+  socket.off('room_state', handleRoomState)
+  socket.off('reconnect_success', handleReconnectResult)
+  socket.off('reconnect_failed', handleReconnectResult)
+
   socket.on('player_joined', handlePlayerJoined)
   socket.on('player_left', handlePlayerLeft)
   socket.on('game_started', handleGameStarted)
