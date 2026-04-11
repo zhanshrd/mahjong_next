@@ -30,10 +30,16 @@ function unlockAudio() {
   }
 }
 
+let listenersAdded = false
+
 export function useAudio() {
   function init() {
     if (audioInitialized) return
     audioInitialized = true
+
+    // Prevent duplicate listener registration across multiple init() calls
+    if (listenersAdded) return
+    listenersAdded = true
 
     // Unlock audio on first user interaction
     const unlockHandler = () => {

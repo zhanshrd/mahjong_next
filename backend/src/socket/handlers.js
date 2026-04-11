@@ -101,6 +101,14 @@ export function setupSocketHandlers(io) {
   // Register cleanup hook for audit logs when rooms are destroyed
   gameStore.onRoomDestroyed = (roomId) => {
     clearAuditLog(roomId);
+    // Also clean up AI control state and reconnect timers for this room
+    gameStore.aiControlled.delete(roomId);
+    // Clean up any reconnect timers associated with this room
+    for (const [sessionId, info] of gameStore.disconnectedPlayers.entries()) {
+      if (info.roomId === roomId) {
+        gameStore._cleanupDisconnectEntry(sessionId);
+      }
+    }
   };
 
   // --- AI action system ---
@@ -214,8 +222,9 @@ export function setupSocketHandlers(io) {
             type: 'pass',
             nextPlayer: timeoutResult.nextPlayer
           });
-          triggerAIActions(roomId);
         }
+        // Always trigger AI actions after claim timer resolves to continue game flow
+        triggerAIActions(roomId);
       });
     } else {
       triggerAIActions(roomId);
@@ -949,6 +958,9 @@ export function setupSocketHandlers(io) {
         }
 
         console.log(`Player ${socket.id} reconnected to room ${roomId} via session ${sessionId} as index ${result.playerIndex}`);
+
+        // Trigger AI actions if needed after reconnection
+        triggerAIActions(roomId);
       } else {
         socket.emit('reconnect_failed', { reason: result.reason });
       }
@@ -969,8 +981,7 @@ export function setupSocketHandlers(io) {
             playerName: result.playerName,
             aiControlled: true
           });
-          // Trigger AI actions for the disconnected player
-          triggerAIActions(result.room.id);
+          // AI actions will be triggered by subsequent game state changes
         } else {
           // Player left from waiting room
           io.to(result.room.id).emit('player_left', {

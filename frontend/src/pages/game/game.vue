@@ -27,7 +27,7 @@
         />
       </div>
       <div class="other-melds" v-if="otherMelds[topPlayerIdx] && otherMelds[topPlayerIdx].length">
-        <div class="meld-group" v-for="(meld, mi) in otherMelds[topPlayerIdx]" :key="'tm'+mi" v-memo="[JSON.stringify(meld)]">
+        <div class="meld-group" v-for="(meld, mi) in otherMelds[topPlayerIdx]" :key="'tm'+mi" v-memo="[meld.length, meld]">
           <TileCard v-for="(t, ti) in meld" :key="'tmt'+ti" :tile="t" small />
         </div>
       </div>
@@ -59,7 +59,7 @@
           <span class="side-count">{{ leftPlayer.handCount }}张</span>
         </div>
         <div class="other-melds" v-if="otherMelds[leftPlayerIdx] && otherMelds[leftPlayerIdx].length">
-          <div class="meld-group" v-for="(meld, mi) in otherMelds[leftPlayerIdx]" :key="'lm'+mi" v-memo="[JSON.stringify(meld)]">
+          <div class="meld-group" v-for="(meld, mi) in otherMelds[leftPlayerIdx]" :key="'lm'+mi" v-memo="[meld.length, meld]">
             <TileCard v-for="(t, ti) in meld" :key="'lmt'+ti" :tile="t" small />
           </div>
         </div>
@@ -106,7 +106,7 @@
           <span class="side-count">{{ rightPlayer.handCount }}张</span>
         </div>
         <div class="other-melds" v-if="otherMelds[rightPlayerIdx] && otherMelds[rightPlayerIdx].length">
-          <div class="meld-group" v-for="(meld, mi) in otherMelds[rightPlayerIdx]" :key="'rm'+mi" v-memo="[JSON.stringify(meld)]">
+          <div class="meld-group" v-for="(meld, mi) in otherMelds[rightPlayerIdx]" :key="'rm'+mi" v-memo="[meld.length, meld]">
             <TileCard v-for="(t, ti) in meld" :key="'rmt'+ti" :tile="t" small />
           </div>
         </div>
@@ -141,7 +141,7 @@
 
       <!-- My melds -->
       <div class="my-melds" v-if="myMelds.length > 0">
-        <div class="meld-group" v-for="(meld, i) in myMelds" :key="'mm'+i" v-memo="[JSON.stringify(meld)]">
+        <div class="meld-group" v-for="(meld, i) in myMelds" :key="'mm'+i" v-memo="[meld.length, meld]">
           <TileCard v-for="(t, j) in meld" :key="'mmt'+i+j" :tile="t" small />
         </div>
       </div>
@@ -533,6 +533,17 @@ onMounted(() => {
   // Get creator status from store
   isCreator.value = store.isCreator
 
+  // Cleanup any existing listeners before adding new ones to prevent duplicates
+  const events = [
+    'game_started', 'game_state_update', 'tile_drawn', 'player_drew',
+    'tile_discarded', 'claim_received', 'can_claim',
+    'claim_resolved', 'claim_declined', 'tingpai_result',
+    'game_over', 'quick_chat', 'error',
+    'player_disconnected', 'player_reconnected', 'reconnect_success', 'reconnect_failed',
+    'audit_log'
+  ]
+  events.forEach(e => socket.off(e))
+
   socket.on('game_started', (data) => {
     resetForNewRound()
     myIndex.value = data.playerIndex
@@ -824,6 +835,13 @@ const SWIPE_THRESHOLD = 40 // minimum px to trigger swipe
 let touchStartX = 0
 let touchStartY = 0
 let touchStartTime = 0
+
+// Reset touch state to prevent cross-round contamination
+watch(finished, () => {
+  touchStartX = 0
+  touchStartY = 0
+  touchStartTime = 0
+})
 
 function onHandTouchStart(e) {
   const touch = e.touches[0]

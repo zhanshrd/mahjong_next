@@ -73,6 +73,7 @@ export class GameStore {
 
     if (room.isEmpty()) {
       this.rooms.delete(roomId);
+      this.aiControlled.delete(roomId);
       if (this.onRoomDestroyed) this.onRoomDestroyed(roomId);
     }
 
@@ -86,6 +87,11 @@ export class GameStore {
 
     const room = this.rooms.get(roomId);
     if (!room) {
+      // Clean up all tracking maps for this socket
+      const sessionId = this.socketSessions.get(socketId);
+      if (sessionId) {
+        this._cleanupDisconnectEntry(sessionId);
+      }
       this.playerRooms.delete(socketId);
       this.socketSessions.delete(socketId);
       return null;

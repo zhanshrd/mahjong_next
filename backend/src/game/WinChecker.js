@@ -12,14 +12,14 @@ export class WinChecker {
     return this.checkStandard(hand);
   }
 
-  // Win checking with wild card (laizi)
+  // Win checking with wild card (laizi) - uses memoization to prevent exponential explosion
   checkWinWithWild(hand, wildCard) {
     if (!hand || hand.length !== 14) return false;
 
     // Count wild cards in hand
     let wildCount = 0;
     const nonWildHand = [];
-    
+
     for (const tile of hand) {
       if (tile === wildCard) {
         wildCount++;
@@ -28,11 +28,19 @@ export class WinChecker {
       }
     }
 
+    // Initialize memoization cache
+    this._initWildMemo();
+
     // Try all possible uses of wild cards
-    return this._tryWildCombinations(nonWildHand, wildCount, wildCard);
+    const result = this._tryWildCombinations(nonWildHand, wildCount, wildCard);
+
+    // Clear memoization cache
+    this._clearWildMemo();
+
+    return result;
   }
 
-  // Try all combinations of wild card usage
+  // Try all combinations of wild card usage (with memoization to prevent exponential explosion)
   _tryWildCombinations(hand, wildCount, wildCard) {
     // Base case: no wild cards left, check if hand wins
     if (wildCount === 0) {
@@ -40,17 +48,35 @@ export class WinChecker {
       return this.checkStandard(hand);
     }
 
+    // Create cache key from sorted hand and wildCount
+    const cacheKey = hand.slice().sort().join(',') + '|' + wildCount;
+    if (this._wildMemo && this._wildMemo.has(cacheKey)) {
+      return this._wildMemo.get(cacheKey);
+    }
+
     // Try using wild as each possible tile
     const allTiles = this._getAllPossibleTiles();
-    
+
     for (const tile of allTiles) {
       const testHand = [...hand, tile];
       if (this._tryWildCombinations(testHand, wildCount - 1, wildCard)) {
+        if (this._wildMemo) this._wildMemo.set(cacheKey, true);
         return true;
       }
     }
 
+    if (this._wildMemo) this._wildMemo.set(cacheKey, false);
     return false;
+  }
+
+  // Initialize memoization cache before wild card operations
+  _initWildMemo() {
+    this._wildMemo = new Map();
+  }
+
+  // Clear memoization cache after operations
+  _clearWildMemo() {
+    this._wildMemo = null;
   }
 
   _getAllPossibleTiles() {

@@ -192,6 +192,14 @@ onMounted(() => {
   const savedName = localStorage.getItem('mahjong_player_name')
   if (savedName) playerName.value = savedName
 
+  // Cleanup any existing listeners before adding new ones to prevent duplicates
+  socket.off('room_created', handleRoomCreated)
+  socket.off('join_success', handleJoinSuccess)
+  socket.off('join_failed', handleJoinFailed)
+  socket.off('lobby_update', handleLobbyUpdate)
+  socket.off('reconnect_success', handleReconnectResult)
+  socket.off('reconnect_failed', handleReconnectResult)
+
   socket.on('room_created', handleRoomCreated)
   socket.on('join_success', handleJoinSuccess)
   socket.on('join_failed', handleJoinFailed)

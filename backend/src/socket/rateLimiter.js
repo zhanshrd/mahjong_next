@@ -17,6 +17,10 @@ const EVENT_LIMITS = {
   join_room: { max: 3, windowMs: 5000 },
   quick_join: { max: 3, windowMs: 5000 },
 
+  // Game session management — max 3 per window
+  start_game: { max: 3, windowMs: 10000 },
+  next_round: { max: 3, windowMs: 10000 },
+
   // Chat — max 10 per window
   quick_chat: { max: 10, windowMs: 5000 },
 
