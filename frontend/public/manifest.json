@@ -7,6 +7,8 @@
   "background_color": "#1a472a",
   "theme_color": "#1a472a",
   "orientation": "portrait",
+  "lang": "zh-CN",
+  "categories": ["games", "entertainment"],
   "icons": [
     {
       "src": "/icons/icon-192.svg",
@@ -20,6 +22,5 @@
       "type": "image/svg+xml",
       "purpose": "any maskable"
     }
-  ],
-  "categories": ["games", "entertainment"]
+  ]
 }

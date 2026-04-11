@@ -4,6 +4,52 @@ import { calculateFlowerFan, checkWildWin } from './AdvancedRules.js';
 // Simplified national mahjong scoring
 // Returns { fan: number, patterns: [{name, fan}], flowerFan?: number, wildMultiplier?: number }
 
+// Calculate the best (highest fan) scoring for a winning hand by trying all decompositions
+export function calculateBestFan(hand, melds, winTile, isSelfDraw, flowerMelds = null, wildCard = null) {
+  const checker = new WinChecker();
+
+  // If no melds, try all decompositions to find the best one
+  if (melds.length === 0) {
+    const decompositions = checker.extractAllDecompositions(hand);
+    if (decompositions.length <= 1) {
+      return calculateFan(hand, melds, winTile, isSelfDraw, flowerMelds, wildCard);
+    }
+
+    let bestResult = null;
+    let bestFan = -1;
+
+    for (const decomp of decompositions) {
+      if (decomp.isSevenPairs) {
+        // For seven pairs, evaluate the original hand
+        const result = calculateFan(hand, melds, winTile, isSelfDraw, flowerMelds, wildCard);
+        if (result.fan > bestFan) {
+          bestFan = result.fan;
+          bestResult = result;
+        }
+      } else {
+        // For standard decomposition, reconstruct hand from pair + sets
+        const reconHand = [];
+        if (decomp.pair) {
+          reconHand.push(decomp.pair, decomp.pair);
+        }
+        for (const set of decomp.sets) {
+          reconHand.push(...set);
+        }
+        const result = calculateFan(reconHand, melds, winTile, isSelfDraw, flowerMelds, wildCard);
+        if (result.fan > bestFan) {
+          bestFan = result.fan;
+          bestResult = result;
+        }
+      }
+    }
+
+    return bestResult || calculateFan(hand, melds, winTile, isSelfDraw, flowerMelds, wildCard);
+  }
+
+  // With melds, just use the standard calculation
+  return calculateFan(hand, melds, winTile, isSelfDraw, flowerMelds, wildCard);
+}
+
 export function calculateFan(hand, melds, winTile, isSelfDraw, flowerMelds = null, wildCard = null) {
   const patterns = [];
   let totalFan = 0;

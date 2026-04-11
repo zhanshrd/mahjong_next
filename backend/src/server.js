@@ -15,6 +15,17 @@ const io = new Server(server, {
   cors: {
     origin: '*',
     methods: ['GET', 'POST']
+  },
+  pingTimeout: 60000,
+  pingInterval: 25000,
+  connectionStateRecovery: {
+    maxDisconnectionDuration: 2 * 60 * 1000
+  },
+  perMessageDeflate: {
+    threshold: 1024,
+    zlibDeflateOptions: {
+      level: 3
+    }
   }
 });
 

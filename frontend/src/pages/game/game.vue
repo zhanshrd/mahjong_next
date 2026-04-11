@@ -21,12 +21,13 @@
         <TileCard
           v-for="(_, i) in topPlayer.handCount"
           :key="'top-' + i"
+          v-memo="[topPlayer.handCount]"
           back-side
           small
         />
       </div>
       <div class="other-melds" v-if="otherMelds[topPlayerIdx] && otherMelds[topPlayerIdx].length">
-        <div class="meld-group" v-for="(meld, mi) in otherMelds[topPlayerIdx]" :key="'tm'+mi">
+        <div class="meld-group" v-for="(meld, mi) in otherMelds[topPlayerIdx]" :key="'tm'+mi" v-memo="[JSON.stringify(meld)]">
           <TileCard v-for="(t, ti) in meld" :key="'tmt'+ti" :tile="t" small />
         </div>
       </div>
@@ -35,6 +36,7 @@
         <TileCard
           v-for="(tile, i) in playerDiscards[topPlayerIdx]"
           :key="'td'+i"
+          v-memo="[tile, isLastDiscard(topPlayerIdx, tile, i)]"
           :tile="tile"
           small
           :rotation="180"
@@ -57,7 +59,7 @@
           <span class="side-count">{{ leftPlayer.handCount }}张</span>
         </div>
         <div class="other-melds" v-if="otherMelds[leftPlayerIdx] && otherMelds[leftPlayerIdx].length">
-          <div class="meld-group" v-for="(meld, mi) in otherMelds[leftPlayerIdx]" :key="'lm'+mi">
+          <div class="meld-group" v-for="(meld, mi) in otherMelds[leftPlayerIdx]" :key="'lm'+mi" v-memo="[JSON.stringify(meld)]">
             <TileCard v-for="(t, ti) in meld" :key="'lmt'+ti" :tile="t" small />
           </div>
         </div>
@@ -66,6 +68,7 @@
           <TileCard
             v-for="(tile, i) in playerDiscards[leftPlayerIdx]"
             :key="'ld'+i"
+            v-memo="[tile, isLastDiscard(leftPlayerIdx, tile, i)]"
             :tile="tile"
             small
             :rotation="90"
@@ -103,7 +106,7 @@
           <span class="side-count">{{ rightPlayer.handCount }}张</span>
         </div>
         <div class="other-melds" v-if="otherMelds[rightPlayerIdx] && otherMelds[rightPlayerIdx].length">
-          <div class="meld-group" v-for="(meld, mi) in otherMelds[rightPlayerIdx]" :key="'rm'+mi">
+          <div class="meld-group" v-for="(meld, mi) in otherMelds[rightPlayerIdx]" :key="'rm'+mi" v-memo="[JSON.stringify(meld)]">
             <TileCard v-for="(t, ti) in meld" :key="'rmt'+ti" :tile="t" small />
           </div>
         </div>
@@ -112,6 +115,7 @@
           <TileCard
             v-for="(tile, i) in playerDiscards[rightPlayerIdx]"
             :key="'rd'+i"
+            v-memo="[tile, isLastDiscard(rightPlayerIdx, tile, i)]"
             :tile="tile"
             small
             :rotation="270"
@@ -128,6 +132,7 @@
         <TileCard
           v-for="(tile, i) in playerDiscards[myIndex]"
           :key="'md'+i"
+          v-memo="[tile, isLastDiscard(myIndex, tile, i)]"
           :tile="tile"
           small
           :class="{ 'last-discard': isLastDiscard(myIndex, tile, i) }"
@@ -136,7 +141,7 @@
 
       <!-- My melds -->
       <div class="my-melds" v-if="myMelds.length > 0">
-        <div class="meld-group" v-for="(meld, i) in myMelds" :key="'mm'+i">
+        <div class="meld-group" v-for="(meld, i) in myMelds" :key="'mm'+i" v-memo="[JSON.stringify(meld)]">
           <TileCard v-for="(t, j) in meld" :key="'mmt'+i+j" :tile="t" small />
         </div>
       </div>
@@ -149,7 +154,10 @@
       </div>
 
       <!-- My hand -->
-      <div class="my-hand">
+      <div class="my-hand"
+        @touchstart.passive="onHandTouchStart"
+        @touchend="onHandTouchEnd"
+      >
         <TileCard
           v-for="(tile, i) in mainHand"
           :key="'h'+i"
@@ -252,7 +260,24 @@
     <div v-if="finished" class="game-over-overlay">
       <div class="game-over-content">
         <div class="round-label" v-if="roundNumber">第{{ roundNumber }}/{{ totalRounds }}局</div>
-        <template v-if="winner !== null">
+        <template v-if="multiWinners.length > 0">
+          <!-- 一炮多响: multiple winners display -->
+          <div class="multi-win-title">一炮多响！</div>
+          <div class="multi-win-list">
+            <div v-for="mw in multiWinners" :key="mw.playerIndex" class="multi-win-item">
+              <div class="winner-text">
+                {{ mw.playerIndex === myIndex ? '你赢了！' : players[mw.playerIndex]?.name + ' 胡牌！' }}
+              </div>
+              <div v-if="mw.fan" class="fan-text">{{ mw.fan.fan }} 番</div>
+              <div v-if="mw.fan && mw.fan.patterns && mw.fan.patterns.length" class="patterns-list">
+                <span v-for="p in mw.fan.patterns" :key="p.name" class="pattern-tag">
+                  {{ p.name }} {{ p.fan }}番
+                </span>
+              </div>
+            </div>
+          </div>
+        </template>
+        <template v-else-if="winner !== null">
           <div class="winner-text">
             {{ winner === myIndex ? '你赢了！' : players[winner]?.name + ' 胡牌！' }}
           </div>
@@ -291,6 +316,31 @@
       :emoji="bubble.emoji"
       :myIndex="myIndex"
     />
+
+    <!-- Audit log toggle button (game over only) -->
+    <button v-if="finished" class="audit-toggle" @click="toggleAuditLog">回放日志</button>
+
+    <!-- Audit log overlay -->
+    <div v-if="showAuditLog" class="audit-overlay" @click.self="showAuditLog = false">
+      <div class="audit-box">
+        <div class="audit-header">
+          <span class="audit-title">操作日志</span>
+          <button class="audit-close" @click="showAuditLog = false">关闭</button>
+        </div>
+        <div class="audit-list" v-if="auditEntries.length">
+          <div v-for="(entry, i) in auditEntries" :key="i" class="audit-entry">
+            <span class="audit-time">{{ formatAuditTime(entry.ts) }}</span>
+            <span class="audit-action">{{ entry.action }}</span>
+            <span v-if="entry.playerIndex !== null" class="audit-player">P{{ entry.playerIndex }}</span>
+            <span v-if="entry.details" class="audit-details">{{ formatAuditDetails(entry.details) }}</span>
+          </div>
+        </div>
+        <div v-else class="audit-empty">暂无日志</div>
+      </div>
+    </div>
+
+    <!-- Toast notification -->
+    <div v-if="toastMsg" class="toast-notification">{{ toastMsg }}</div>
   </div>
 </template>
 
@@ -363,8 +413,21 @@ const currentDrawnTile = ref(null)
 const showTingpai = ref(false)
 const gameOverFan = ref(null)
 const gameOverPatterns = ref([])
+const multiWinners = ref([]) // [{playerIndex, fan}] for 一炮多响
 const isLandscape = ref(window.innerWidth > window.innerHeight)
 const selfKongTiles = ref([]) // tiles that can be used for concealed kong
+
+// Audit log state
+const showAuditLog = ref(false)
+const auditEntries = ref([])
+const toastMsg = ref(null)
+let toastTimer = null
+
+function showToast(msg, duration = 1500) {
+  toastMsg.value = msg
+  clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => { toastMsg.value = null }, duration)
+}
 
 function resetForNewRound() {
   playerDiscards.value = [[], [], [], []]
@@ -381,6 +444,9 @@ function resetForNewRound() {
   currentDrawnTile.value = null
   hasDrawn.value = false
   showTingpai.value = false
+  multiWinners.value = []
+  gameOverFan.value = null
+  gameOverPatterns.value = []
 }
 
 // Sorted hand (excluding the just-drawn tile, shown separately)
@@ -609,9 +675,17 @@ onMounted(() => {
     if (data.winner !== null) playSFX('win')
     finished.value = true
     winner.value = data.winner
-    gameOverFan.value = data.fan || null
-    gameOverPatterns.value = data.patterns || []
+    gameOverFan.value = (data.fan?.fan !== undefined) ? data.fan.fan : (data.fan || null)
+    gameOverPatterns.value = data.fan?.patterns || data.patterns || []
     store.gamePhase = 'finished'
+
+    // Handle multi-win (一炮多响)
+    if (data.multiWin && data.multiWinners) {
+      multiWinners.value = data.multiWinners
+      winner.value = null // clear single winner to show multi-win template
+    } else {
+      multiWinners.value = []
+    }
 
     // Match session data
     if (data.matchSession) {
@@ -633,7 +707,16 @@ onMounted(() => {
   })
 
   socket.on('error', (data) => {
+    if (data.code === 'RATE_LIMITED') {
+      showToast('操作过快，请稍候', data.retryAfterMs || 1500)
+      return
+    }
     console.error('Game error:', data.message)
+  })
+
+  // Audit log response
+  socket.on('audit_log', (data) => {
+    auditEntries.value = data.entries || []
   })
 
   // Player disconnected notification
@@ -700,7 +783,8 @@ onUnmounted(() => {
     'tile_discarded', 'claim_received', 'can_claim',
     'claim_resolved', 'claim_declined', 'tingpai_result',
     'game_over', 'quick_chat', 'error',
-    'player_disconnected', 'player_reconnected', 'reconnect_success', 'reconnect_failed'
+    'player_disconnected', 'player_reconnected', 'reconnect_success', 'reconnect_failed',
+    'audit_log'
   ]
   events.forEach(e => socket.off(e))
   window.removeEventListener('resize', onResize)
@@ -733,6 +817,42 @@ function updateState(data) {
   if (data.players) players.value = data.players
   if (data.dealerIndex !== undefined) dealerIndex.value = data.dealerIndex
   if (data.selfKongTiles) selfKongTiles.value = data.selfKongTiles
+}
+
+// === Touch swipe gesture for mobile discard ===
+const SWIPE_THRESHOLD = 40 // minimum px to trigger swipe
+let touchStartX = 0
+let touchStartY = 0
+let touchStartTime = 0
+
+function onHandTouchStart(e) {
+  const touch = e.touches[0]
+  touchStartX = touch.clientX
+  touchStartY = touch.clientY
+  touchStartTime = Date.now()
+}
+
+function onHandTouchEnd(e) {
+  if (!isMyTurn.value || !hasDrawn.value) return
+
+  const touch = e.changedTouches[0]
+  const dx = touch.clientX - touchStartX
+  const dy = touch.clientY - touchStartY
+  const elapsed = Date.now() - touchStartTime
+
+  // Only accept fast swipes (under 500ms)
+  if (elapsed > 500) return
+
+  const absDx = Math.abs(dx)
+  const absDy = Math.abs(dy)
+
+  // Detect upward or leftward swipe (away from hand)
+  if ((dy < -SWIPE_THRESHOLD && absDy > absDx) || (dx < -SWIPE_THRESHOLD && absDx > absDy)) {
+    // If a tile is already selected, discard it on swipe
+    if (selectedTile.value) {
+      discardSelected()
+    }
+  }
 }
 
 // === Player actions ===
@@ -847,9 +967,68 @@ function nextRound() {
   finished.value = false
   socket.emit('next_round', { roomId: roomId.value })
 }
+
+// === Audit log ===
+
+const AUDIT_ACTION_LABELS = {
+  create_room: '创建房间',
+  start_game: '开始游戏',
+  draw_tile: '摸牌',
+  discard_tile: '出牌',
+  self_kong: '暗杠',
+  declare_claim: '声明',
+  pass_claim: '过',
+  next_round: '下一局',
+  reconnect_request: '重连'
+}
+
+function toggleAuditLog() {
+  if (showAuditLog.value) {
+    showAuditLog.value = false
+    return
+  }
+  socket.emit('get_audit_log', { roomId: roomId.value })
+  showAuditLog.value = true
+}
+
+function formatAuditTime(ts) {
+  const d = new Date(ts)
+  return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+}
+
+function formatAuditDetails(details) {
+  if (!details) return ''
+  const parts = []
+  if (details.tile) parts.push(details.tile)
+  if (details.claimType) parts.push(details.claimType)
+  if (details.name) parts.push(details.name)
+  return parts.join(' ')
+}
 </script>
 
 <style scoped>
+/* ===== Toast notification ===== */
+.toast-notification {
+  position: fixed;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0,0,0,0.75);
+  color: #fff;
+  padding: 8px 20px;
+  border-radius: 20px;
+  font-size: 14px;
+  z-index: 9999;
+  pointer-events: none;
+  animation: toast-fade 1.5s ease-out;
+}
+@keyframes toast-fade {
+  0% { opacity: 0; transform: translateX(-50%) translateY(10px); }
+  15% { opacity: 1; transform: translateX(-50%) translateY(0); }
+  85% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
 /* ===== Game table ===== */
 .game-table {
   width: 100vw;
@@ -1460,6 +1639,33 @@ function nextRound() {
   color: #e0c060;
 }
 
+/* ===== Multi-win (一炮多响) ===== */
+.multi-win-title {
+  font-size: 28px;
+  font-weight: bold;
+  color: #f44336;
+  text-shadow: 2px 2px 8px rgba(244, 67, 54, 0.5);
+  margin-bottom: 12px;
+}
+
+.multi-win-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+
+.multi-win-item {
+  padding: 8px 12px;
+  background: rgba(240, 208, 96, 0.08);
+  border: 1px solid rgba(240, 208, 96, 0.2);
+  border-radius: 10px;
+}
+
+.multi-win-item .winner-text {
+  font-size: 22px;
+}
+
 /* ===== Landscape optimizations ===== */
 @media (orientation: landscape) and (max-height: 500px) {
   .game-table {
@@ -1624,5 +1830,108 @@ function nextRound() {
   font-size: 13px;
   color: #7a9a7a;
   margin-bottom: 8px;
+}
+
+/* ===== Audit log ===== */
+.audit-toggle {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 4px 10px;
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid #3a6b3a;
+  border-radius: 8px;
+  color: #a0c0a0;
+  font-size: 12px;
+  cursor: pointer;
+  z-index: 10;
+}
+
+.audit-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+}
+
+.audit-box {
+  background: #1a3a2a;
+  border: 1px solid #3a6b3a;
+  border-radius: 16px;
+  padding: 20px;
+  width: 360px;
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.audit-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.audit-title {
+  font-size: 16px;
+  font-weight: bold;
+  color: #f0d060;
+}
+
+.audit-close {
+  padding: 4px 12px;
+  background: transparent;
+  border: 1px solid #555;
+  border-radius: 6px;
+  color: #aaa;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.audit-list {
+  overflow-y: auto;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.audit-entry {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 4px 8px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.audit-time {
+  color: #6a8a6a;
+  flex-shrink: 0;
+}
+
+.audit-action {
+  color: #c0d0c0;
+  font-weight: 600;
+}
+
+.audit-player {
+  color: #f0d060;
+  font-weight: 600;
+}
+
+.audit-details {
+  color: #8aaa8a;
+}
+
+.audit-empty {
+  text-align: center;
+  color: #5a7a5a;
+  padding: 24px;
+  font-size: 14px;
 }
 </style>

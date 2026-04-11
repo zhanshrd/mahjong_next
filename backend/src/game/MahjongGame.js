@@ -1,11 +1,12 @@
 import { TileSet, isFlowerTile, FLOWER_OWNER, getNextTile } from './TileSet.js';
 import { WinChecker } from './WinChecker.js';
-import { calculateFan } from './Scorer.js';
-import { 
-  drawBirdTiles, 
-  calculateBirdHits, 
+import { calculateBestFan } from './Scorer.js';
+import { GameStateMachine, GamePhase } from './GameStateMachine.js';
+import {
+  drawBirdTiles,
+  calculateBirdHits,
   calculateBirdMultiplier,
-  getBirdCount 
+  getBirdCount
 } from './AdvancedRules.js';
 
 // Claim priority: win > kong > pong > chow
@@ -13,6 +14,8 @@ const CLAIM_PRIORITY = { win: 4, kong: 3, pong: 2, chow: 1 };
 
 // Tile sort order: W(万) < T(条) < D(筒) < F(风) < J(箭), numeric within suit
 const TILE_SORT_ORDER = { W: 0, T: 1, D: 2, F: 3, J: 4 };
+
+export { GamePhase };
 
 export class MahjongGame {
   constructor(players, dealerIndex = 0, options = {}) {
@@ -51,11 +54,82 @@ export class MahjongGame {
     // Bird tiles (zhania) - drawn after win
     this.birdTiles = [];
 
+    // State machine: formalized FSM for phase tracking
+    this._fsm = new GameStateMachine();
+
+    // Snapshot stack for rollback
+    this._snapshots = [];
+
     // Dealer draws first tile
     this._initialDraw();
 
     // Auto-replace flower tiles after initial deal
     this._replaceFlowers();
+  }
+
+  // --- State machine accessors ---
+
+  get phase() {
+    return this._fsm.phase;
+  }
+
+  get stateLocked() {
+    return this._fsm.isLocked();
+  }
+
+  // --- Snapshot & rollback ---
+
+  /**
+   * Capture a snapshot of the game state for rollback.
+   * Returns a snapshot id that can be passed to rollback().
+   */
+  getSnapshot() {
+    const snapshot = {
+      id: this._snapshots.length,
+      phase: this._fsm.phase,
+      hands: this.hands.map(h => [...h]),
+      melds: this.melds.map(m => m.map(set => [...set])),
+      flowerMelds: this.flowerMelds.map(fm => [...fm]),
+      discardPile: [...this.discardPile],
+      currentPlayer: this.currentPlayer,
+      winner: this.winner,
+      finished: this.finished,
+      lastDiscard: this.lastDiscard,
+      lastDiscardPlayer: this.lastDiscardPlayer,
+      hasDrawn: [...this.hasDrawn],
+      birdTiles: [...this.birdTiles],
+      multiWinResults: this.multiWinResults ? JSON.parse(JSON.stringify(this.multiWinResults)) : null,
+      tileSetState: this.tileSet.getState()
+    };
+    this._snapshots.push(snapshot);
+    return snapshot;
+  }
+
+  /**
+   * Rollback to a previously captured snapshot.
+   * @param {object} snapshot - The snapshot to restore (from getSnapshot()).
+   */
+  rollback(snapshot) {
+    this.hands = snapshot.hands.map(h => [...h]);
+    this.melds = snapshot.melds.map(m => m.map(set => [...set]));
+    this.flowerMelds = snapshot.flowerMelds.map(fm => [...fm]);
+    this.discardPile = [...snapshot.discardPile];
+    this.currentPlayer = snapshot.currentPlayer;
+    this.winner = snapshot.winner;
+    this.finished = snapshot.finished;
+    this.lastDiscard = snapshot.lastDiscard;
+    this.lastDiscardPlayer = snapshot.lastDiscardPlayer;
+    this.hasDrawn = [...snapshot.hasDrawn];
+    this.birdTiles = [...snapshot.birdTiles];
+    this.multiWinResults = snapshot.multiWinResults;
+    this.tileSet.restoreState(snapshot.tileSetState);
+    this._fsm.phase = snapshot.phase;
+
+    // Clear claim window on rollback
+    this.claimWindow = null;
+
+    // Discard snapshots taken after this one
+    this._snapshots = this._snapshots.slice(0, snapshot.id + 1);
   }
 
   // Determine wild card by flipping a tile from the back
@@ -123,6 +197,7 @@ export class MahjongGame {
     const tile = this.tileSet.drawOne();
     if (!tile) {
       this.finished = true;
+      this._fsm.transition('self_draw');
       return { success: true, tile: null, drawGame: true };
     }
 
@@ -136,11 +211,12 @@ export class MahjongGame {
     if (checker.checkWin(this.hands[playerIndex], this.wildCard)) {
       this.winner = playerIndex;
       this.finished = true;
-      const fanResult = calculateFan(
+      this._fsm.transition('self_draw');
+      const fanResult = calculateBestFan(
         this.hands[playerIndex], this.melds[playerIndex], tile, true,
         this.flowerMelds[playerIndex], this.wildCard
       );
-      
+
       // Draw bird tiles after self-draw win
       const birdCount = getBirdCount(fanResult, true);
       if (birdCount > 0) {
@@ -202,6 +278,11 @@ export class MahjongGame {
         requiredResponders: new Set(potentialClaims.map(c => c.playerIndex))
       };
     }
+
+    // Always transition to CLAIMING after discard; if no claims exist,
+    // the claim-pass transition happens immediately via _tryResolveClaims
+    // or the caller detects potentialClaims.length === 0.
+    this._fsm.transition('discard');
 
     return {
       success: true,
@@ -336,12 +417,67 @@ export class MahjongGame {
       // Everyone passed - proceed with normal flow
       cw.resolved = true;
       this.claimWindow = null;
+      this._fsm.transition('claim_pass');
       return { success: true, resolved: 'pass', nextPlayer: this.currentPlayer };
+    }
+
+    // Check for multiple win claims (一炮多响)
+    if (bestClaim.type === 'win') {
+      const winClaims = [];
+      for (const [playerIndex, claim] of cw.claims) {
+        if (claim.type === 'win') {
+          winClaims.push({ playerIndex, ...claim });
+        }
+      }
+      if (winClaims.length > 1) {
+        cw.resolved = true;
+        return this._processMultipleWins(winClaims);
+      }
     }
 
     // Apply the winning claim
     cw.resolved = true;
     return this._applyResolvedClaim(bestClaim);
+  }
+
+  // Process multiple simultaneous wins (一炮多响)
+  _processMultipleWins(winClaims) {
+    const tile = this.lastDiscard;
+    const discarderIndex = this.lastDiscardPlayer;
+    const winResults = [];
+
+    for (const claim of winClaims) {
+      // Use a copy for fan calculation to avoid corrupting canonical hand state
+      const tempHand = [...this.hands[claim.playerIndex], tile];
+      const fanResult = calculateBestFan(
+        tempHand, this.melds[claim.playerIndex], tile, false,
+        this.flowerMelds[claim.playerIndex], this.wildCard
+      );
+      winResults.push({
+        playerIndex: claim.playerIndex,
+        fan: fanResult
+      });
+    }
+
+    // Finalize game
+    this.finished = true;
+    this.discardPile.pop();
+    this.claimWindow = null;
+    this._fsm.transition('multi_win');
+
+    // Store multi-win data for scoring
+    this.multiWinResults = winResults;
+    this.winner = winResults[0].playerIndex; // primary winner (first declared)
+
+    return {
+      success: true,
+      resolved: 'multi_win',
+      winners: winResults.map(w => ({
+        playerIndex: w.playerIndex,
+        fan: w.fan
+      })),
+      discarderIndex
+    };
   }
 
   _applyResolvedClaim(claim) {
@@ -353,7 +489,7 @@ export class MahjongGame {
       this.finished = true;
       this.discardPile.pop();
 
-      const fanResult = calculateFan(
+      const fanResult = calculateBestFan(
         this.hands[claim.playerIndex], this.melds[claim.playerIndex], tile, false,
         this.flowerMelds[claim.playerIndex], this.wildCard
       );
@@ -365,10 +501,11 @@ export class MahjongGame {
       }
 
       this.claimWindow = null;
-      return { 
-        success: true, 
-        resolved: 'win', 
-        winner: claim.playerIndex, 
+      this._fsm.transition('claim_win');
+      return {
+        success: true,
+        resolved: 'win',
+        winner: claim.playerIndex,
         fan: fanResult,
         birdTiles: this.birdTiles,
         birdHits: calculateBirdHits(this.birdTiles, this.dealerIndex, claim.playerIndex, false),
@@ -409,22 +546,22 @@ export class MahjongGame {
       if (kongChecker.checkWin(this.hands[claim.playerIndex], this.wildCard)) {
         this.winner = claim.playerIndex;
         this.finished = true;
-        const fanResult = calculateFan(
+        const fanResult = calculateBestFan(
           this.hands[claim.playerIndex], this.melds[claim.playerIndex], replacement, true,
           this.flowerMelds[claim.playerIndex], this.wildCard
         );
-        
+
         // Draw bird tiles after kong self-draw
         const birdCount = getBirdCount(fanResult, true);
         if (birdCount > 0) {
           this.birdTiles = drawBirdTiles(this.tileSet, birdCount);
         }
-        
-        return { 
-          success: true, 
-          resolved: 'win', 
-          winner: claim.playerIndex, 
-          fan: fanResult, 
+
+        return {
+          success: true,
+          resolved: 'win',
+          winner: claim.playerIndex,
+          fan: fanResult,
           selfDraw: true,
           birdTiles: this.birdTiles,
           birdHits: calculateBirdHits(this.birdTiles, this.dealerIndex, claim.playerIndex, true),
@@ -437,6 +574,7 @@ export class MahjongGame {
         };
       }
 
+      this._fsm.transition('claim_kong');
       return { success: true, resolved: 'kong', playerIndex: claim.playerIndex, currentPlayer: claim.playerIndex };
     }
 
@@ -453,6 +591,7 @@ export class MahjongGame {
       this.hasDrawn[claim.playerIndex] = true; // must discard immediately
       this.lastDiscard = null;
       this.claimWindow = null;
+      this._fsm.transition('claim_pong');
       return { success: true, resolved: 'pong', playerIndex: claim.playerIndex, currentPlayer: claim.playerIndex };
     }
 
@@ -470,6 +609,7 @@ export class MahjongGame {
       this.hasDrawn[claim.playerIndex] = true; // must discard immediately
       this.lastDiscard = null;
       this.claimWindow = null;
+      this._fsm.transition('claim_chow');
       return { success: true, resolved: 'chow', playerIndex: claim.playerIndex, currentPlayer: claim.playerIndex };
     }
 
@@ -495,6 +635,7 @@ export class MahjongGame {
     const replacement = this.tileSet.drawOne();
     if (!replacement) {
       this.finished = true;
+      this._fsm.transition('self_draw');
       return { success: true, drawGame: true };
     }
 
@@ -506,7 +647,8 @@ export class MahjongGame {
     if (checker.checkWin(this.hands[playerIndex], this.wildCard)) {
       this.winner = playerIndex;
       this.finished = true;
-      const fanResult = calculateFan(
+      this._fsm.transition('self_draw');
+      const fanResult = calculateBestFan(
         this.hands[playerIndex], this.melds[playerIndex], replacement, true,
         this.flowerMelds[playerIndex], this.wildCard
       );
@@ -533,6 +675,7 @@ export class MahjongGame {
       };
     }
 
+    this._fsm.transition('self_kong');
     return { success: true, tile: replacement };
   }
 
@@ -581,7 +724,7 @@ export class MahjongGame {
 
     return waitingTiles.map(tile => {
       const testHand = [...this.hands[playerIndex], tile];
-      const fanResult = calculateFan(
+      const fanResult = calculateBestFan(
         testHand, this.melds[playerIndex], tile, true,
         this.flowerMelds[playerIndex], this.wildCard
       );
@@ -650,8 +793,14 @@ export class MahjongGame {
       claimWindow: this.claimWindow && !this.claimWindow.resolved
         ? this._getClaimWindowStatus()
         : null,
-      dealerIndex: this.dealerIndex
+      dealerIndex: this.dealerIndex,
+      phase: this._fsm.phase
     };
+
+    // Include multi-win data if applicable
+    if (this.multiWinResults) {
+      state.multiWinResults = this.multiWinResults;
+    }
 
     // Include tingpai hint if player has 13 tiles (before draw) or after discard
     if (this.hands[playerIndex].length === 13 && !this.finished) {
@@ -676,7 +825,92 @@ export class MahjongGame {
       wildCard: this.wildCard,
       wildCardTile: this.wildCardTile,
       birdTiles: this.birdTiles,
-      dealerIndex: this.dealerIndex
+      dealerIndex: this.dealerIndex,
+      multiWinResults: this.multiWinResults || null,
+      phase: this._fsm.phase
     };
+  }
+
+  // =========================================================================
+  // AI decision methods (for disconnected players)
+  // =========================================================================
+
+  // Pick the best tile to discard using a simple greedy strategy.
+  // Priority: isolated tiles first, then tiles with fewer connections.
+  getAIDiscardTile(playerIndex) {
+    const hand = this.hands[playerIndex];
+    if (hand.length === 0) return null;
+
+    // Score each tile: lower score = more expendable
+    const scores = hand.map((tile, idx) => {
+      let score = 0;
+
+      // Count same-suit neighbors (connections)
+      const suit = tile[0];
+      const num = parseInt(tile.slice(1), 10);
+
+      for (const other of hand) {
+        if (other === tile) continue;
+        const oSuit = other[0];
+        const oNum = parseInt(other.slice(1), 10);
+
+        if (oSuit === suit && !isNaN(num) && !isNaN(oNum)) {
+          // Same suit numeric tile
+          const diff = Math.abs(num - oNum);
+          if (diff === 1) score += 3; // adjacent = valuable
+          if (diff === 2) score += 1; // one-gap = somewhat valuable
+        }
+      }
+
+      // Count pairs (already in hand)
+      const sameCount = hand.filter(t => t === tile).length;
+      if (sameCount >= 3) score += 10; // triplet - keep
+      if (sameCount >= 2) score += 5;  // pair - keep
+
+      // Honor/wind tiles are harder to form sets with
+      if (suit === 'F' || suit === 'J') score += 2;
+
+      // Penalize tiles that appear in discard pile (opponents may be waiting)
+      const discardCount = this.discardPile.filter(t => t === tile).length;
+      score -= discardCount;
+
+      return { tile, idx, score };
+    });
+
+    // Sort by score ascending (lowest = most expendable)
+    scores.sort((a, b) => a.score - b.score);
+
+    return scores[0].tile;
+  }
+
+  // Decide whether to claim and what type. Returns { action: 'win'|'kong'|'pong'|'chow'|'pass', chowTiles? }
+  getAIClaimDecision(playerIndex, claimOptions) {
+    if (!claimOptions || claimOptions.length === 0) return { action: 'pass' };
+
+    // AI priority: win > kong > pong > chow > pass
+    // Always claim win
+    const winClaim = claimOptions.find(c => c.type === 'win');
+    if (winClaim) return { action: 'win' };
+
+    // Claim kong if available
+    const kongClaim = claimOptions.find(c => c.type === 'kong');
+    if (kongClaim) return { action: 'kong' };
+
+    // Claim pong if we have few melds (need to build hand)
+    const pongClaim = claimOptions.find(c => c.type === 'pong');
+    if (pongClaim && this.melds[playerIndex].length < 3) {
+      return { action: 'pong' };
+    }
+
+    // Claim chow only if we have very few melds and it's a good sequence
+    const chowClaim = claimOptions.find(c => c.type === 'chow');
+    if (chowClaim && this.melds[playerIndex].length < 2 && chowClaim.chowOptions) {
+      // Pick first chow option
+      const firstOption = chowClaim.chowOptions[0];
+      const companionTiles = Array.isArray(firstOption) ? firstOption : (firstOption.missing || []);
+      return { action: 'chow', chowTiles: companionTiles };
+    }
+
+    return { action: 'pass' };
   }
 }

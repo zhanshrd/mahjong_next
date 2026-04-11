@@ -131,4 +131,12 @@ export class TileSet {
   get remaining() {
     return this.tiles.length;
   }
+
+  getState() {
+    return [...this.tiles];
+  }
+
+  restoreState(state) {
+    this.tiles = [...state];
+  }
 }

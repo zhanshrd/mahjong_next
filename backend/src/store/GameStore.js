@@ -13,6 +13,10 @@ export class GameStore {
     this.reconnectTimers = new Map(); // sessionId -> timeoutId
     // Map socketId -> sessionId for lookup on disconnect
     this.socketSessions = new Map(); // socketId -> sessionId
+    // AI-controlled players: roomId -> Set<playerIndex>
+    this.aiControlled = new Map();
+    // Optional hook called when a room is destroyed
+    this.onRoomDestroyed = null;
   }
 
   createRoom(creatorId, options = {}) {
@@ -69,6 +73,7 @@ export class GameStore {
 
     if (room.isEmpty()) {
       this.rooms.delete(roomId);
+      if (this.onRoomDestroyed) this.onRoomDestroyed(roomId);
     }
 
     return { room, removedPlayer };
@@ -113,12 +118,17 @@ export class GameStore {
         }, RECONNECT_GRACE_MS);
 
         this.reconnectTimers.set(sessionId, timerId);
+
+        this.playerRooms.delete(socketId);
+        this.socketSessions.delete(socketId);
+
+        return { room, playerIndex, playerName, sessionId, deferred: true };
       }
 
-      this.playerRooms.delete(socketId);
+      // No sessionId (join never completed) -- remove immediately to avoid orphaned seat
       this.socketSessions.delete(socketId);
-
-      return { room, playerIndex, playerName, sessionId, deferred: true };
+      const immediateResult = this.leaveRoom(socketId);
+      return immediateResult ? { ...immediateResult, deferred: false } : { room, playerIndex, playerName, deferred: false };
     }
 
     // For waiting rooms, remove immediately
@@ -190,10 +200,34 @@ export class GameStore {
       room.removePlayer(info.oldSocketId);
       if (room.isEmpty()) {
         this.rooms.delete(info.roomId);
+        this.aiControlled.delete(info.roomId);
+        if (this.onRoomDestroyed) this.onRoomDestroyed(info.roomId);
       }
     }
 
     this._cleanupDisconnectEntry(sessionId);
+  }
+
+  // Mark a player as AI-controlled (disconnected during game)
+  setAIControlled(roomId, playerIndex) {
+    if (!this.aiControlled.has(roomId)) {
+      this.aiControlled.set(roomId, new Set());
+    }
+    this.aiControlled.get(roomId).add(playerIndex);
+  }
+
+  // Remove AI control (player reconnected)
+  clearAIControlled(roomId, playerIndex) {
+    const set = this.aiControlled.get(roomId);
+    if (set) {
+      set.delete(playerIndex);
+    }
+  }
+
+  // Check if a player is AI-controlled
+  isAIControlled(roomId, playerIndex) {
+    const set = this.aiControlled.get(roomId);
+    return set ? set.has(playerIndex) : false;
   }
 
   _generateSessionId() {
@@ -254,7 +288,9 @@ export class GameStore {
       if (room.state === 'waiting' && !room.isFull() && room.options.roomPassword === '8888') {
         if (room.addPlayer(player)) {
           this.playerRooms.set(player.id, room.id);
-          return { success: true, room };
+          const sessionId = this._generateSessionId();
+          this.socketSessions.set(player.id, sessionId);
+          return { success: true, room, sessionId };
         }
       }
     }

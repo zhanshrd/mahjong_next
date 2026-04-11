@@ -167,6 +167,77 @@ export class WinChecker {
     return [];
   }
 
+  // Extract ALL possible set decompositions from a winning hand
+  // Returns array of { pair, sets } objects
+  extractAllDecompositions(hand) {
+    if (!hand || hand.length !== 14) return [];
+    const results = [];
+    const counts = this._countTiles(hand);
+
+    // Check seven pairs
+    if (this.checkSevenPairs(hand)) {
+      const pairs = [];
+      for (const tile in counts) {
+        if (counts[tile] === 2) {
+          pairs.push([tile, tile]);
+        }
+      }
+      results.push({ pair: null, sets: pairs, isSevenPairs: true });
+    }
+
+    // Check standard decompositions
+    for (const pairTile in counts) {
+      if (counts[pairTile] >= 2) {
+        counts[pairTile] -= 2;
+        const allSets = [];
+        this._extractAllSetsRecursive({ ...counts }, [], allSets);
+        for (const sets of allSets) {
+          results.push({ pair: pairTile, sets, isSevenPairs: false });
+        }
+        counts[pairTile] += 2;
+      }
+    }
+
+    return results;
+  }
+
+  _extractAllSetsRecursive(counts, currentSets, results) {
+    const firstTile = Object.keys(counts).find(t => counts[t] > 0);
+    if (!firstTile) {
+      results.push([...currentSets]);
+      return;
+    }
+
+    // Try pong
+    if (counts[firstTile] >= 3) {
+      counts[firstTile] -= 3;
+      currentSets.push([firstTile, firstTile, firstTile]);
+      this._extractAllSetsRecursive(counts, currentSets, results);
+      currentSets.pop();
+      counts[firstTile] += 3;
+    }
+
+    // Try chow
+    if (this._isNumberTile(firstTile)) {
+      const prefix = firstTile[0];
+      const num = parseInt(firstTile.slice(1), 10);
+      const next1 = `${prefix}${num + 1}`;
+      const next2 = `${prefix}${num + 2}`;
+
+      if (counts[next1] > 0 && counts[next2] > 0) {
+        counts[firstTile] -= 1;
+        counts[next1] -= 1;
+        counts[next2] -= 1;
+        currentSets.push([firstTile, next1, next2]);
+        this._extractAllSetsRecursive(counts, currentSets, results);
+        currentSets.pop();
+        counts[firstTile] += 1;
+        counts[next1] += 1;
+        counts[next2] += 1;
+      }
+    }
+  }
+
   _extractSetsRecursive(counts, sets) {
     const firstTile = Object.keys(counts).find(t => counts[t] > 0);
     if (!firstTile) return true;

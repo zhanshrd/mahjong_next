@@ -66,6 +66,47 @@ export class MatchSession {
     }
   }
 
+  // Record a multi-win round (一炮多响): multiple winners from one discard
+  recordMultiWinRound(winners, isDraw, discarderIndex, birdMultiplier = 1) {
+    this.currentRound++;
+
+    const scores = [0, 0, 0, 0];
+
+    if (!isDraw && winners.length > 0) {
+      // Each winner scores independently, discarder pays all
+      for (const w of winners) {
+        const fan = w.fan ? w.fan.fan : 0;
+        const basePoints = fan * BASE_SCORE;
+        const finalPoints = Math.ceil(basePoints * birdMultiplier);
+        scores[w.playerIndex] += finalPoints;
+        scores[discarderIndex] -= finalPoints;
+      }
+    }
+
+    const primaryWinner = winners.length > 0 ? winners[0].playerIndex : null;
+    const primaryFan = winners.length > 0 ? winners[0].fan : null;
+
+    this.roundResults.push({
+      round: this.currentRound,
+      winner: primaryWinner,
+      fan: primaryFan ? primaryFan.fan : 0,
+      patterns: primaryFan ? primaryFan.patterns : [],
+      isDraw,
+      isSelfDraw: false,
+      isMultiWin: true,
+      multiWinners: winners.map(w => ({ playerIndex: w.playerIndex, fan: w.fan })),
+      scores,
+      dealer: this.dealerIndex,
+      birdHits: [],
+      birdMultiplier
+    });
+
+    // Update running totals
+    for (let i = 0; i < 4; i++) {
+      this.runningScores[i] += scores[i];
+    }
+  }
+
   // Advance dealer: 庄家赢连庄, 非庄家赢轮换, 流局连庄
   advanceDealer(winnerIndex) {
     if (winnerIndex !== null && winnerIndex !== this.dealerIndex) {
