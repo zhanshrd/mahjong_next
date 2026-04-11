@@ -638,8 +638,9 @@ export function setupSocketHandlers(io) {
                 type: 'pass',
                 nextPlayer: result.nextPlayer
               });
-              triggerAIActions(roomId);
             }
+            // Always trigger AI actions after claim timer resolves to continue game flow
+            triggerAIActions(roomId);
           });
         } else {
           // No potential claims -- next player must draw. Trigger AI if needed.
