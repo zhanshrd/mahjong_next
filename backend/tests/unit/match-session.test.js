@@ -96,8 +96,8 @@ describe('MatchSession with Bird Multiplier', () => {
       const scores = session.roundResults[0].scores;
       // Should use default multiplier = 1
       // Base: 2 fan × 10 = 20 points
-      // Self-draw: winner gets 20, each loser pays ceil(20/3) = 7
-      // Total deducted: 7+7+7 = 21, winner gets +21 to balance (sum = 0)
+      // Self-draw scoring: each loser pays ceil(20/3) = 7
+      // To balance sum = 0: winner gets +(7+7+7) = 21, each loser pays -7
       expect(scores[0]).toBe(21);
       expect(scores[1]).toBe(-7);
       expect(scores[2]).toBe(-7);
@@ -113,8 +113,8 @@ describe('MatchSession with Bird Multiplier', () => {
       
       const scores = session.roundResults[0].scores;
       // Base: 2 fan × 10 = 20 points
-      // Self-draw: winner gets 20, each loser pays ceil(20/3) = 7
-      // Total deducted: 7+7+7 = 21, winner gets +21 to balance (sum = 0)
+      // Self-draw scoring: each loser pays ceil(20/3) = 7
+      // To balance sum = 0: winner gets +(7+7+7) = 21, each loser pays -7
       expect(scores[0]).toBe(21);
       expect(scores[1]).toBe(-7);
       expect(scores[2]).toBe(-7);

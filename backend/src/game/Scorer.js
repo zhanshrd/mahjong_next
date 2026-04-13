@@ -105,8 +105,8 @@ export function calculateFan(hand, melds, winTile, isSelfDraw, flowerMelds = nul
     totalFan += 8;
   }
 
-  // 十三幺 (thirteen orphans)
-  if (_isThirteenOrphans(hand)) {
+  // 十三幺 (thirteen orphans) - must be concealed (no melds)
+  if (melds.length === 0 && _isThirteenOrphans(hand)) {
     patterns.push({ name: '十三幺', fan: 8 });
     totalFan += 8;
   }
@@ -127,8 +127,8 @@ export function calculateFan(hand, melds, winTile, isSelfDraw, flowerMelds = nul
 
   // --- 4 fan patterns ---
 
-  // 七对 (seven pairs)
-  if (isSevenPairs) {
+  // 七对 (seven pairs) - must be concealed (no melds)
+  if (isSevenPairs && melds.length === 0) {
     patterns.push({ name: '七对子', fan: 4 });
     totalFan += 4;
   }

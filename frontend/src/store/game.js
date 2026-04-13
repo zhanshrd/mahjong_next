@@ -1,18 +1,19 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, shallowRef } from 'vue'
 
 export const useGameStore = defineStore('game', () => {
+  // 使用 shallowRef 优化大型对象
   const roomId = ref('')
   const playerName = ref('')
   const playerIndex = ref(-1)
-  const players = ref([])
+  const players = shallowRef([])
   const isCreator = ref(false)
   const roomPassword = ref('8888')
 
   // Game state
-  const myHand = ref([])
-  const myMelds = ref([])
-  const discardPile = ref([])
+  const myHand = shallowRef([])
+  const myMelds = shallowRef([])
+  const discardPile = shallowRef([])
   const currentPlayer = ref(0)
   const hasDrawn = ref(false)
   const tilesLeft = ref(0)
@@ -23,11 +24,11 @@ export const useGameStore = defineStore('game', () => {
   // UI state
   const selectedTile = ref(null)
   const currentDrawnTile = ref(null)
-  const availableClaims = ref([])
+  const availableClaims = shallowRef([])
   const gamePhase = ref('lobby') // lobby | waiting | playing | finished
 
   const isMyTurn = computed(() => currentPlayer.value === playerIndex.value)
-  const otherHands = ref([])
+  const otherHands = shallowRef([])
 
   function reset() {
     roomId.value = ''

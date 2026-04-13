@@ -61,7 +61,12 @@ export class Room {
   endGame() {
     this.state = 'finished';
     if (this.game) {
+      this.game.destroy(); // Clean up game resources to prevent memory leaks
       this.game.finished = true;
+      this.game = null; // Clear game reference
+    }
+    if (this.matchSession) {
+      this.matchSession.finished = true;
     }
   }
 

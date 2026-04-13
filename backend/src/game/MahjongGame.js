@@ -57,8 +57,9 @@ export class MahjongGame {
     // State machine: formalized FSM for phase tracking
     this._fsm = new GameStateMachine();
 
-    // Snapshot stack for rollback
+    // Snapshot stack for rollback (limited to 50 snapshots)
     this._snapshots = [];
+    this.maxSnapshots = 50;
 
     // Dealer draws first tile
     this._initialDraw();
@@ -102,6 +103,14 @@ export class MahjongGame {
       tileSetState: this.tileSet.getState()
     };
     this._snapshots.push(snapshot);
+    
+    // Limit snapshot stack size to prevent memory accumulation
+    if (this._snapshots.length > this.maxSnapshots) {
+      this._snapshots = this._snapshots.slice(-this.maxSnapshots);
+      // Re-index remaining snapshots
+      this._snapshots.forEach((s, i) => { s.id = i; });
+    }
+    
     return snapshot;
   }
 
@@ -919,5 +928,42 @@ export class MahjongGame {
     }
 
     return { action: 'pass' };
+  }
+
+  /**
+   * Destroy the game instance and clean up all resources
+   * Prevents memory leaks from timers, snapshots, and large data structures
+   */
+  destroy() {
+    // Clear claim timer
+    if (this.claimTimerId !== null) {
+      clearTimeout(this.claimTimerId);
+      this.claimTimerId = null;
+    }
+    
+    // Clear snapshots to free memory
+    this._snapshots = [];
+    
+    // Nullify large data structures to help GC
+    this.tileSet = null;
+    this.hands = null;
+    this.melds = null;
+    this.flowerMelds = null;
+    this.discardPile = null;
+    this.players = null;
+    this.birdTiles = null;
+    this.multiWinResults = null;
+    
+    // Reset FSM
+    if (this._fsm) {
+      this._fsm.reset();
+      this._fsm = null;
+    }
+    
+    // Clear claim window references
+    this.claimWindow = null;
+    
+    // Clear hasDrawn array
+    this.hasDrawn = null;
   }
 }

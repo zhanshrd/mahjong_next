@@ -265,6 +265,11 @@ export class GameStore {
     return this.rooms.size;
   }
 
+  // Get all rooms (for monitoring/admin purposes)
+  getAllRooms() {
+    return Array.from(this.rooms.values());
+  }
+
   // Get all rooms visible in the lobby (waiting state with available slots)
   getLobbyRooms() {
     const lobbyRooms = [];
@@ -301,6 +306,69 @@ export class GameStore {
       }
     }
     return { success: false, reason: 'NO_AVAILABLE_ROOM' };
+  }
+
+  /**
+   * Clean up all timers for a room to prevent memory leaks
+   * @param {string} roomId - Room ID to clean up timers for
+   */
+  cleanupRoomTimers(roomId) {
+    const room = this.rooms.get(roomId);
+    if (!room) return;
+
+    // Clear all reconnect timers for players in this room
+    for (const [sessionId, info] of this.disconnectedPlayers.entries()) {
+      if (info.roomId === roomId) {
+        if (this.reconnectTimers.has(sessionId)) {
+          clearTimeout(this.reconnectTimers.get(sessionId));
+          this.reconnectTimers.delete(sessionId);
+        }
+        this.disconnectedPlayers.delete(sessionId);
+      }
+    }
+  }
+
+  /**
+   * Destroy a room and clean up all associated resources
+   * @param {string} roomId - Room ID to destroy
+   */
+  destroyRoom(roomId) {
+    const room = this.rooms.get(roomId);
+    if (!room) return;
+
+    // Clean up timers first (reconnect timers, AI timers, etc.)
+    this.cleanupRoomTimers(roomId);
+    
+    // Clean up AI controlled players
+    this.aiControlled.delete(roomId);
+    
+    // Clean up audit log
+    import('../socket/auditLog.js').then(({ clearAuditLog }) => {
+      clearAuditLog(roomId);
+    });
+    
+    // Notify destruction hook if set
+    if (this.onRoomDestroyed) {
+      this.onRoomDestroyed(roomId);
+    }
+    
+    // Remove room from map
+    this.rooms.delete(roomId);
+    
+    // Clean up player mappings
+    for (const player of room.players) {
+      if (player) {
+        this.playerRooms.delete(player.id);
+        this.socketSessions.delete(player.id);
+      }
+    }
+    
+    // Clean up any remaining disconnect entries for this room
+    for (const [sessionId, info] of this.disconnectedPlayers.entries()) {
+      if (info.roomId === roomId) {
+        this._cleanupDisconnectEntry(sessionId);
+      }
+    }
   }
 }
 

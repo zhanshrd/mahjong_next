@@ -5,13 +5,24 @@
   "scripts": {
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:performance": "node --expose-gc test/performance/run-performance-tests.js",
+    "test:perf:socketio": "node --expose-gc test/performance/run-performance-tests.js --suite=socketio",
+    "test:perf:pool": "node --expose-gc test/performance/run-performance-tests.js --suite=object-pool",
+    "test:perf:memory": "node --expose-gc test/performance/run-performance-tests.js --suite=memory-leak",
+    "test:perf:database": "node --expose-gc test/performance/run-performance-tests.js --suite=database",
+    "test:perf:report": "node --expose-gc test/performance/run-performance-tests.js --report=all"
   },
   "dependencies": {
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
     "mongoose": "^8.0.0",
-    "socket.io": "^4.6.1"
+    "socket.io": "^4.6.1",
+    "socket.io-msgpack-parser": "^3.0.2",
+    "prom-client": "^15.1.0",
+    "pino": "^8.17.0",
+    "jsonwebtoken": "^9.0.2",
+    "uuid": "^9.0.1"
   },
   "devDependencies": {
     "socket.io-client": "^4.8.3",

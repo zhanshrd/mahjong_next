@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import { MahjongGame, GamePhase } from '../../src/game/MahjongGame.js'
 import { GameStateMachine } from '../../src/game/GameStateMachine.js'
 
@@ -191,7 +191,15 @@ describe('MahjongGame', () => {
   // Claim timeout mechanism (BUG-3)
   // =========================================================================
   describe('Claim timeout mechanism', () => {
-    it('should start a claim timer that fires after timeout', async () => {
+    beforeEach(() => {
+      vi.useFakeTimers()
+    })
+
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it('should start a claim timer that fires after timeout', () => {
       const game = new MahjongGame(players)
       let timerFired = false
 
@@ -201,9 +209,11 @@ describe('MahjongGame', () => {
       expect(timerFired).toBe(false)
       expect(game.claimTimerId).toBeTruthy()
 
-      // Wait for timer (30s is too long for tests — but we test the mechanism)
-      // We'll use clearClaimTimer instead to verify cleanup
-      game.clearClaimTimer()
+      // Fast-forward time to trigger timer
+      vi.advanceTimersByTime(30000)
+
+      // Timer should have fired
+      expect(timerFired).toBe(true)
       expect(game.claimTimerId).toBeNull()
     })
 
@@ -221,7 +231,12 @@ describe('MahjongGame', () => {
       expect(firstFired).toBe(false)
       expect(game.claimTimerId).toBeTruthy()
 
-      game.clearClaimTimer()
+      // Fast-forward time
+      vi.advanceTimersByTime(30000)
+
+      // Only second timer should fire
+      expect(secondFired).toBe(true)
+      expect(game.claimTimerId).toBeNull()
     })
 
     it('should force-pass all unresponsive players via _forcePassAll', () => {

@@ -138,6 +138,13 @@ describe('Advanced Rules', () => {
       expect(getBirdCount({ fan: 0 }, true)).toBe(0);
     });
 
+    it('should return 0 birds when fanResult is null or undefined', () => {
+      expect(getBirdCount(null, false)).toBe(0);
+      expect(getBirdCount(null, true)).toBe(0);
+      expect(getBirdCount(undefined, false)).toBe(0);
+      expect(getBirdCount(undefined, true)).toBe(0);
+    });
+
     it('should return 4 birds for big win (fan >= 6)', () => {
       expect(getBirdCount({ fan: 6 }, false)).toBe(4);
       expect(getBirdCount({ fan: 7 }, false)).toBe(4);

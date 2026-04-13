@@ -3,6 +3,10 @@ import { MahjongGame } from '../game/MahjongGame.js';
 import { drawBirdTiles, calculateBirdHits, calculateBirdMultiplier, getBirdCount } from '../game/AdvancedRules.js';
 import { checkRateLimit, cleanupRateLimit } from './rateLimiter.js';
 import { auditLog, getAuditLog, clearAuditLog } from './auditLog.js';
+import { validateAction, checkAndRecordActionTime } from '../security/actionValidator.js';
+import { generateDeviceFingerprint, isTrustedDevice } from '../security/deviceFingerprint.js';
+import logger, { logGameEvent, logPlayerAction, logSecurityEvent, logRateLimit } from '../monitoring/logger.js';
+import { activeGames, onlinePlayers, websocketConnections, totalRooms, gameActions, winActions } from '../monitoring/metrics.js';
 
 const QUICK_PHRASES = [
   '等等我', '打快一点', '不好意思', '厉害',
@@ -100,16 +104,42 @@ function buildMultiWinGameOverPayload(room, winResults, discarderIndex) {
 export function setupSocketHandlers(io) {
   // Register cleanup hook for audit logs when rooms are destroyed
   gameStore.onRoomDestroyed = (roomId) => {
-    clearAuditLog(roomId);
-    // Also clean up AI control state and reconnect timers for this room
+    // Clean up all timers first (reconnect timers, AI timers, etc.)
+    gameStore.cleanupRoomTimers(roomId);
+    
+    // Clean up AI control state
     gameStore.aiControlled.delete(roomId);
-    // Clean up any reconnect timers associated with this room
+    
+    // Clean up audit log
+    clearAuditLog(roomId);
+    
+    // Clean up any remaining reconnect timers (defense-in-depth)
     for (const [sessionId, info] of gameStore.disconnectedPlayers.entries()) {
       if (info.roomId === roomId) {
         gameStore._cleanupDisconnectEntry(sessionId);
       }
     }
   };
+
+  // Store AI action timer references for cleanup
+  const aiTimers = new Map(); // Map<roomId, Set<timerId>>
+
+  // Helper to clear AI timers for a room
+  function clearAITimers(roomId) {
+    const timers = aiTimers.get(roomId);
+    if (timers) {
+      timers.forEach(timerId => clearTimeout(timerId));
+      aiTimers.delete(roomId);
+    }
+  }
+
+  // Helper to store AI timer
+  function storeAITimer(roomId, timerId) {
+    if (!aiTimers.has(roomId)) {
+      aiTimers.set(roomId, new Set());
+    }
+    aiTimers.get(roomId).add(timerId);
+  }
 
   // --- AI action system ---
   // Triggers AI actions for AI-controlled players after state changes.
@@ -125,10 +155,12 @@ export function setupSocketHandlers(io) {
     if (aiSet.has(cp)) {
       if (!game.hasDrawn[cp] && !game.claimWindow) {
         // AI needs to draw
-        setTimeout(() => performAIDraw(roomId, cp), 800);
+        const timerId = setTimeout(() => performAIDraw(roomId, cp), 800);
+        storeAITimer(roomId, timerId);
       } else if (game.hasDrawn[cp] && !game.claimWindow) {
         // AI needs to discard
-        setTimeout(() => performAIDiscard(roomId, cp), 600);
+        const timerId = setTimeout(() => performAIDiscard(roomId, cp), 600);
+        storeAITimer(roomId, timerId);
       }
     }
 
@@ -138,7 +170,8 @@ export function setupSocketHandlers(io) {
         if (game.claimWindow.requiredResponders.has(playerIdx) &&
             !game.claimWindow.claims.has(playerIdx) &&
             !game.claimWindow.passes.has(playerIdx)) {
-          setTimeout(() => performAIClaim(roomId, playerIdx), 500);
+          const timerId = setTimeout(() => performAIClaim(roomId, playerIdx), 500);
+          storeAITimer(roomId, timerId);
         }
       }
     }
@@ -155,15 +188,18 @@ export function setupSocketHandlers(io) {
     if (result.drawGame) {
       room.endGame();
       io.to(roomId).emit('game_over', buildGameOverPayload(room, null, false, true, null));
+      clearAITimer(roomId);
     } else if (result.selfDrawWin) {
       room.endGame();
       io.to(roomId).emit('game_over', buildGameOverPayload(room, playerIndex, true, false, result.fan));
+      clearAITimer(roomId);
     } else {
       io.to(roomId).emit('player_drew', {
         playerIndex,
         tilesLeft: room.game.tileSet.remaining
       });
-      setTimeout(() => performAIDiscard(roomId, playerIndex), 600);
+      const timerId = setTimeout(() => performAIDiscard(roomId, playerIndex), 600);
+      storeAITimer(roomId, timerId);
     }
   }
 
@@ -197,7 +233,8 @@ export function setupSocketHandlers(io) {
 
       for (const [pIdx, claims] of playerClaims) {
         if (gameStore.isAIControlled(roomId, pIdx)) {
-          setTimeout(() => performAIClaim(roomId, pIdx), 300);
+          const timerId = setTimeout(() => performAIClaim(roomId, pIdx), 300);
+          storeAITimer(roomId, timerId);
         } else {
           const claimPlayerId = room.players[pIdx].id;
           const claimOptions = claims.map(c => ({
@@ -308,13 +345,34 @@ export function setupSocketHandlers(io) {
   }
 
   io.on('connection', (socket) => {
-    console.log('Player connected:', socket.id);
+    // 生成设备指纹
+    const deviceFingerprint = generateDeviceFingerprint(socket.handshake);
+    socket.deviceFingerprint = deviceFingerprint;
+    
+    // 检查设备可信度
+    if (socket.user) {
+      isTrustedDevice(socket.user.uid, socket);
+    }
+    
+    console.log('Player connected:', socket.id, 'Device:', deviceFingerprint.substring(0, 16));
+    logger.info({
+      module: 'connection',
+      socketId: socket.id,
+      userId: socket.user?.uid,
+      deviceFingerprint: deviceFingerprint.substring(0, 16)
+    }, '玩家连接');
 
     // Per-socket middleware for rate limiting
     socket.use((packet, next) => {
       const eventName = packet[0];
-      const check = checkRateLimit(socket.id, eventName);
+      const check = checkRateLimit(socket.id, eventName, socket);
       if (!check.allowed) {
+        // 记录速率限制事件
+        rateLimitHits.inc({ event_type: eventName });
+        logRateLimit(socket.id, eventName, {
+          retryAfterMs: check.retryAfterMs
+        });
+        
         socket.emit('error', {
           message: '操作过于频繁，请稍后再试',
           code: 'RATE_LIMITED',
@@ -509,6 +567,24 @@ export function setupSocketHandlers(io) {
         return;
       }
 
+      // 服务器权威验证
+      const validation = validateAction(room, playerIndex, 'draw_tile', {});
+      if (!validation.valid) {
+        logSecurityEvent('INVALID_ACTION', {
+          action: 'draw_tile',
+          roomId,
+          playerId: socket.id,
+          playerIndex,
+          reason: validation.reason
+        });
+        socket.emit('error', { message: `无效操作：${validation.reason}` });
+        return;
+      }
+
+      // 记录游戏动作
+      gameActions.inc({ action_type: 'draw_tile' });
+      logGameEvent(roomId, 'draw_tile', { playerIndex });
+
       const result = room.game.drawTile(playerIndex);
 
       if (result.success) {
@@ -517,6 +593,7 @@ export function setupSocketHandlers(io) {
           io.to(roomId).emit('game_over', buildGameOverPayload(room, null, false, true, null));
         } else if (result.selfDrawWin) {
           room.endGame();
+          winActions.inc({ win_type: 'self_draw' });
           io.to(roomId).emit('game_over', buildGameOverPayload(room, playerIndex, true, false, result.fan));
         } else {
           const state = room.game.getStateForPlayer(playerIndex);
@@ -594,6 +671,24 @@ export function setupSocketHandlers(io) {
         socket.emit('error', { message: 'Not in this game' });
         return;
       }
+
+      // 服务器权威验证
+      const validation = validateAction(room, playerIndex, 'discard_tile', { tile });
+      if (!validation.valid) {
+        logSecurityEvent('INVALID_ACTION', {
+          action: 'discard_tile',
+          roomId,
+          playerId: socket.id,
+          playerIndex,
+          reason: validation.reason
+        });
+        socket.emit('error', { message: `无效操作：${validation.reason}` });
+        return;
+      }
+
+      // 记录游戏动作
+      gameActions.inc({ action_type: 'discard_tile' });
+      logGameEvent(roomId, 'discard_tile', { playerIndex, tile });
 
       const result = room.game.discardTile(playerIndex, tile);
 
@@ -971,7 +1066,13 @@ export function setupSocketHandlers(io) {
 
     socket.on('disconnect', () => {
       console.log('Player disconnected:', socket.id);
-      cleanupRateLimit(socket.id);
+      logger.info({
+        module: 'connection',
+        socketId: socket.id,
+        userId: socket.user?.uid
+      }, '玩家断开连接');
+      
+      cleanupRateLimit(socket.id, socket);
       const result = gameStore.handleDisconnect(socket.id);
       if (result && result.room) {
         if (result.deferred) {
@@ -992,6 +1093,21 @@ export function setupSocketHandlers(io) {
           broadcastLobbyUpdate();
         }
       }
+      
+      // 更新监控指标
+      updateMetrics();
     });
   });
+  
+  // 更新监控指标的辅助函数
+  function updateMetrics() {
+    websocketConnections.set(io.engine.clientsCount);
+    onlinePlayers.set(io.engine.clientsCount);
+    totalRooms.set(gameStore.getAllRooms().length);
+    activeGames.set(gameStore.getAllRooms().filter(r => r.state === 'playing').length);
+  }
+  
+  // 定期更新指标
+  setInterval(updateMetrics, 5000);
+  updateMetrics(); // 初始化
 }

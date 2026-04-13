@@ -56,3 +56,48 @@ export function getAuditLog(roomId, { since } = {}) {
 export function clearAuditLog(roomId) {
   roomLogs.delete(roomId);
 }
+
+// Auto-cleanup for audit logs
+const AUDIT_CLEANUP_INTERVAL = 5 * 60 * 1000; // 5 minutes
+const AUDIT_MAX_AGE = 30 * 60 * 1000; // 30 minutes
+
+let auditCleanupTimer = null;
+
+/**
+ * Start periodic cleanup of expired audit logs
+ */
+export function startAuditLogCleanup() {
+  if (auditCleanupTimer) {
+    clearInterval(auditCleanupTimer);
+  }
+
+  auditCleanupTimer = setInterval(() => {
+    const now = Date.now();
+    let cleanedCount = 0;
+
+    for (const [roomId, log] of roomLogs.entries()) {
+      // Clean up logs older than 30 minutes
+      const lastEntry = log.entries[log.entries.length - 1];
+      if (lastEntry && now - lastEntry.ts > AUDIT_MAX_AGE) {
+        roomLogs.delete(roomId);
+        cleanedCount++;
+      }
+    }
+
+    if (cleanedCount > 0) {
+      console.log(`[AuditLog] Cleaned up ${cleanedCount} expired room logs`);
+    }
+  }, AUDIT_CLEANUP_INTERVAL);
+
+  return auditCleanupTimer;
+}
+
+/**
+ * Stop periodic cleanup
+ */
+export function stopAuditLogCleanup() {
+  if (auditCleanupTimer) {
+    clearInterval(auditCleanupTimer);
+    auditCleanupTimer = null;
+  }
+}
